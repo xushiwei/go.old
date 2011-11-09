@@ -1,0 +1,19 @@
+package.bash packages the Go toolchain for Window's in 
+zip and installer (exe) format. 
+
+Dependencies
+============
+- Inno Setup: http://www.jrsoftware.org/isinfo.php
+- 7Zip command-line: http://www.7-zip.org/download.html
+- MinGW/Msys tools
+
+Unzip and place 7za.exe in msys' bin directory.
+
+Packaging
+=========
+- have a go tree at $GOROOT
+- make sure $GOBIN=$GOROOT\bin or is empty
+- make sure $GOARCH=386 or $GOARCH=amd64
+- select appropriate version "hg up -r ..."
+- build go "cd $GOROOT/src; ./all.bash"
+- create Windows packages "cd $GOROOT/misc/windows; ./package.bash"
