@@ -13,9 +13,6 @@ bool	runtime·iscgo;
 
 static void unwindstack(G*, byte*);
 static void schedule(G*);
-static void acquireproc(void);
-static void releaseproc(void);
-static M *startm(void);
 
 typedef struct Sched Sched;
 
@@ -72,7 +69,7 @@ struct Sched {
 	volatile uint32 atomic;	// atomic scheduling word (see below)
 
 	int32 profilehz;	// cpu profiling rate
-	
+
 	bool init;  // running initialization
 	bool lockmain;  // init called runtime.LockOSThread
 
@@ -701,7 +698,7 @@ runtime·starttheworld(bool extra)
 		// but m is not running a specific goroutine,
 		// so set the helpgc flag as a signal to m's
 		// first schedule(nil) to mcpu-- and grunning--.
-		m = startm();
+		m = runtime·newm();
 		m->helpgc = 1;
 		runtime·sched.grunning++;
 	}
@@ -739,8 +736,6 @@ struct CgoThreadStart
 };
 
 // Kick off new m's as needed (up to mcpumax).
-// There are already `other' other cpus that will
-// start looking for goroutines shortly.
 // Sched is locked.
 static void
 matchmg(void)
@@ -758,13 +753,14 @@ matchmg(void)
 
 		// Find the m that will run gp.
 		if((mp = mget(gp)) == nil)
-			mp = startm();
+			mp = runtime·newm();
 		mnextg(mp, gp);
 	}
 }
 
-static M*
-startm(void)
+// Create a new m.  It will start off with a call to runtime·mstart.
+M*
+runtime·newm(void)
 {
 	M *m;
 
@@ -995,6 +991,9 @@ runtime·exitsyscall(void)
 	g->gcstack = nil;
 }
 
+// Called from runtime·lessstack when returning from a function which
+// allocated a new stack segment.  The function's return value is in
+// m->cret.
 void
 runtime·oldstack(void)
 {
@@ -1026,6 +1025,11 @@ runtime·oldstack(void)
 	runtime·gogo(&old.gobuf, m->cret);
 }
 
+// Called from reflect·call or from runtime·morestack when a new
+// stack segment is needed.  Allocate a new stack big enough for
+// m->moreframesize bytes, copy m->moreargsize bytes to the new frame,
+// and then act as though runtime·lessstack called the function at
+// m->morepc.
 void
 runtime·newstack(void)
 {
@@ -1113,6 +1117,10 @@ runtime·newstack(void)
 	*(int32*)345 = 123;	// never return
 }
 
+// Hook used by runtime·malg to call runtime·stackalloc on the
+// scheduler stack.  This exists because runtime·stackalloc insists
+// on being called on the scheduler stack, to avoid trying to grow
+// the stack while allocating a new stack segment.
 static void
 mstackalloc(G *gp)
 {
@@ -1120,6 +1128,7 @@ mstackalloc(G *gp)
 	runtime·gogo(&gp->sched, 0);
 }
 
+// Allocate a new g, with a stack big enough for stacksize bytes.
 G*
 runtime·malg(int32 stacksize)
 {
@@ -1146,15 +1155,13 @@ runtime·malg(int32 stacksize)
 	return newg;
 }
 
-/*
- * Newproc and deferproc need to be textflag 7
- * (no possible stack split when nearing overflow)
- * because they assume that the arguments to fn
- * are available sequentially beginning at &arg0.
- * If a stack split happened, only the one word
- * arg0 would be copied.  It's okay if any functions
- * they call split the stack below the newproc frame.
- */
+// Create a new g running fn with siz bytes of arguments.
+// Put it on the queue of g's waiting to run.
+// The compiler turns a go statement into a call to this.
+// Cannot split the stack because it assumes that the arguments
+// are available sequentially after &fn; they would not be
+// copied if a stack split occurred.  It's OK for this to call
+// functions that split the stack.
 #pragma textflag 7
 void
 runtime·newproc(int32 siz, byte* fn, ...)
@@ -1168,6 +1175,10 @@ runtime·newproc(int32 siz, byte* fn, ...)
 	runtime·newproc1(fn, argp, siz, 0, runtime·getcallerpc(&siz));
 }
 
+// Create a new g running fn with narg bytes of arguments starting
+// at argp and returning nret bytes of results.  callerpc is the
+// address of the go statement that created this.  The new g is put
+// on the queue of g's waiting to run.
 G*
 runtime·newproc1(byte *fn, byte *argp, int32 narg, int32 nret, void *callerpc)
 {
@@ -1228,6 +1239,12 @@ runtime·newproc1(byte *fn, byte *argp, int32 narg, int32 nret, void *callerpc)
 //printf(" goid=%d\n", newg->goid);
 }
 
+// Create a new deferred function fn with siz bytes of arguments.
+// The compiler turns a defer statement into a call to this.
+// Cannot split the stack because it assumes that the arguments
+// are available sequentially after &fn; they would not be
+// copied if a stack split occurred.  It's OK for this to call
+// functions that split the stack.
 #pragma textflag 7
 uintptr
 runtime·deferproc(int32 siz, byte* fn, ...)
@@ -1256,6 +1273,16 @@ runtime·deferproc(int32 siz, byte* fn, ...)
 	return 0;
 }
 
+// Run a deferred function if there is one.
+// The compiler inserts a call to this at the end of any
+// function which calls defer.
+// If there is a deferred function, this will call runtime·jmpdefer,
+// which will jump to the deferred function such that it appears
+// to have been called by the caller of deferreturn at the point
+// just before deferreturn was called.  The effect is that deferreturn
+// is called again and again until there are no more deferred functions.
+// Cannot split the stack because we reuse the caller's frame to
+// call the deferred function.
 #pragma textflag 7
 void
 runtime·deferreturn(uintptr arg0)
@@ -1277,6 +1304,7 @@ runtime·deferreturn(uintptr arg0)
 	runtime·jmpdefer(fn, argp);
 }
 
+// Run all deferred functions for the current goroutine.
 static void
 rundefer(void)
 {
@@ -1318,6 +1346,7 @@ unwindstack(G *gp, byte *sp)
 	}
 }
 
+// Print all currently active panics.  Used when crashing.
 static void
 printpanics(Panic *p)
 {
@@ -1334,6 +1363,7 @@ printpanics(Panic *p)
 
 static void recovery(G*);
 
+// The implementation of the predeclared function panic.
 void
 runtime·panic(Eface e)
 {
@@ -1376,6 +1406,9 @@ runtime·panic(Eface e)
 	runtime·dopanic(0);
 }
 
+// Unwind the stack after a deferred function calls recover
+// after a panic.  Then arrange to continue running as though
+// the caller of the deferred function returned normally.
 static void
 recovery(G *gp)
 {
@@ -1407,7 +1440,10 @@ recovery(G *gp)
 	runtime·gogo(&gp->sched, 1);
 }
 
-#pragma textflag 7	/* no split, or else g->stackguard is not the stack for fp */
+// The implementation of the predeclared function recover.
+// Cannot split the stack because it needs to reliably
+// find the stack segment of its caller.
+#pragma textflag 7
 void
 runtime·recover(byte *argp, Eface ret)
 {
@@ -1519,6 +1555,7 @@ runtime·Gosched(void)
 	runtime·gosched();
 }
 
+// Implementation of runtime.GOMAXPROCS.
 // delete when scheduler is stronger
 int32
 runtime·gomaxprocsfunc(int32 n)
@@ -1634,6 +1671,7 @@ static struct {
 	uintptr pcbuf[100];
 } prof;
 
+// Called if we receive a SIGPROF signal.
 void
 runtime·sigprof(uint8 *pc, uint8 *sp, uint8 *lr, G *gp)
 {
@@ -1653,6 +1691,7 @@ runtime·sigprof(uint8 *pc, uint8 *sp, uint8 *lr, G *gp)
 	runtime·unlock(&prof);
 }
 
+// Arrange to call fn with a traceback hz times a second.
 void
 runtime·setcpuprofilerate(void (*fn)(uintptr*, int32), int32 hz)
 {
@@ -1683,8 +1722,10 @@ runtime·setcpuprofilerate(void (*fn)(uintptr*, int32), int32 hz)
 
 void (*libcgo_setenv)(byte**);
 
+// Update the C environment if cgo is loaded.
+// Called from syscall.Setenv.
 void
-os·setenv_c(String k, String v)
+syscall·setenv_c(String k, String v)
 {
 	byte *arg[2];
 

@@ -45,15 +45,15 @@ func (p *Package) writeDefs() {
 	fmt.Fprintf(fgo2, "// Created by cgo - DO NOT EDIT\n\n")
 	fmt.Fprintf(fgo2, "package %s\n\n", p.PackageName)
 	fmt.Fprintf(fgo2, "import \"unsafe\"\n\n")
-	fmt.Fprintf(fgo2, "import \"os\"\n\n")
+	fmt.Fprintf(fgo2, "import \"syscall\"\n\n")
 	fmt.Fprintf(fgo2, "import _ \"runtime/cgo\"\n\n")
 	fmt.Fprintf(fgo2, "type _ unsafe.Pointer\n\n")
-	fmt.Fprintf(fgo2, "func _Cerrno(dst *error, x int) { *dst = os.Errno(x) }\n")
+	fmt.Fprintf(fgo2, "func _Cerrno(dst *error, x int) { *dst = syscall.Errno(x) }\n")
 
 	for name, def := range typedef {
 		fmt.Fprintf(fgo2, "type %s ", name)
 		printer.Fprint(fgo2, fset, def)
-		fmt.Fprintf(fgo2, "\n")
+		fmt.Fprintf(fgo2, "\n\n")
 	}
 	fmt.Fprintf(fgo2, "type _Ctype_void [0]byte\n")
 
@@ -501,6 +501,7 @@ func (p *Package) writeExports(fgo2, fc, fm *os.File) {
 		if fn.Recv != nil {
 			goname = "_cgoexpwrap" + cPrefix + "_" + fn.Recv.List[0].Names[0].Name + "_" + goname
 		}
+		fmt.Fprintf(fc, "#pragma dynexport %s %s\n", goname, goname)
 		fmt.Fprintf(fc, "extern void ·%s();\n", goname)
 		fmt.Fprintf(fc, "\nvoid\n")
 		fmt.Fprintf(fc, "_cgoexp%s_%s(void *a, int32 n)\n", cPrefix, exp.ExpName)

@@ -1,0 +1,13 @@
+application: godashboard
+version: go
+runtime: go
+api_version: 3
+
+handlers:
+- url: /log/.+
+  script: _go_app
+- url: /(commit|package|result|tag|todo)
+  script: _go_app
+- url: /buildtest
+  script: _go_app
+  login: admin

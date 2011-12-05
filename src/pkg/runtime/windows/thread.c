@@ -81,7 +81,7 @@ runtime·osinit(void)
 void
 runtime·goenvs(void)
 {
-	extern Slice os·Envs;
+	extern Slice syscall·envs;
 
 	uint16 *env;
 	String *s;
@@ -101,9 +101,9 @@ runtime·goenvs(void)
 		s[i] = runtime·gostringw(p);
 		p += runtime·findnullw(p)+1;
 	}
-	os·Envs.array = (byte*)s;
-	os·Envs.len = n;
-	os·Envs.cap = n;
+	syscall·envs.array = (byte*)s;
+	syscall·envs.len = n;
+	syscall·envs.cap = n;
 
 	runtime·stdcall(runtime·FreeEnvironmentStringsW, 1, env);
 }
@@ -150,10 +150,25 @@ runtime·usleep(uint32 us)
 	runtime·stdcall(runtime·Sleep, 1, (uintptr)us);
 }
 
-void
-runtime·semasleep(void)
+#define INFINITE ((uintptr)0xFFFFFFFF)
+
+int32
+runtime·semasleep(int64 ns)
 {
-	runtime·stdcall(runtime·WaitForSingleObject, 2, m->waitsema, (uintptr)-1);
+	uintptr ms;
+
+	if(ns < 0)
+		ms = INFINITE;
+	else if(ns/1000000 > 0x7fffffffLL)
+		ms = 0x7fffffff;
+	else {
+		ms = ns/1000000;
+		if(ms == 0)
+			ms = 1;
+	}
+	if(runtime·stdcall(runtime·WaitForSingleObject, 2, m->waitsema, ms) != 0)
+		return -1;  // timeout
+	return 0;
 }
 
 void
@@ -198,10 +213,22 @@ runtime·nanotime(void)
 	int64 filetime;
 
 	runtime·stdcall(runtime·GetSystemTimeAsFileTime, 1, &filetime);
-	
+
 	// Filetime is 100s of nanoseconds since January 1, 1601.
 	// Convert to nanoseconds since January 1, 1970.
 	return (filetime - 116444736000000000LL) * 100LL;
+}
+
+void
+time·now(int64 sec, int32 usec)
+{
+	int64 ns;
+	
+	ns = runtime·nanotime();
+	sec = ns / 1000000000LL;
+	usec = ns - sec * 1000000000LL;
+	FLUSH(&sec);
+	FLUSH(&usec);
 }
 
 // Calling stdcall on os stack.

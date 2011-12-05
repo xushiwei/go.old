@@ -1,19 +1,23 @@
+// Copyright 2011 The Go Authors.  All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package syscall
 
 const (
 	// Windows errors.
-	ERROR_FILE_NOT_FOUND      = 2
-	ERROR_PATH_NOT_FOUND      = 3
-	ERROR_ACCESS_DENIED       = 5
-	ERROR_NO_MORE_FILES       = 18
-	ERROR_BROKEN_PIPE         = 109
-	ERROR_BUFFER_OVERFLOW     = 111
-	ERROR_INSUFFICIENT_BUFFER = 122
-	ERROR_MOD_NOT_FOUND       = 126
-	ERROR_PROC_NOT_FOUND      = 127
-	ERROR_ENVVAR_NOT_FOUND    = 203
-	ERROR_OPERATION_ABORTED   = 995
-	ERROR_IO_PENDING          = 997
+	ERROR_FILE_NOT_FOUND      Errno = 2
+	ERROR_PATH_NOT_FOUND      Errno = 3
+	ERROR_ACCESS_DENIED       Errno = 5
+	ERROR_NO_MORE_FILES       Errno = 18
+	ERROR_BROKEN_PIPE         Errno = 109
+	ERROR_BUFFER_OVERFLOW     Errno = 111
+	ERROR_INSUFFICIENT_BUFFER Errno = 122
+	ERROR_MOD_NOT_FOUND       Errno = 126
+	ERROR_PROC_NOT_FOUND      Errno = 127
+	ERROR_ENVVAR_NOT_FOUND    Errno = 203
+	ERROR_OPERATION_ABORTED   Errno = 995
+	ERROR_IO_PENDING          Errno = 997
 )
 
 const (
@@ -655,8 +659,48 @@ type MibIfRow struct {
 
 type CertContext struct {
 	EncodingType uint32
-	EncodedCert  uintptr
+	EncodedCert  *byte
 	Length       uint32
 	CertInfo     uintptr
 	Store        Handle
 }
+
+const (
+	HKEY_CLASSES_ROOT = 0x80000000 + iota
+	HKEY_CURRENT_USER
+	HKEY_LOCAL_MACHINE
+	HKEY_USERS
+	HKEY_PERFORMANCE_DATA
+	HKEY_CURRENT_CONFIG
+	HKEY_DYN_DATA
+
+	KEY_QUERY_VALUE        = 1
+	KEY_SET_VALUE          = 2
+	KEY_CREATE_SUB_KEY     = 4
+	KEY_ENUMERATE_SUB_KEYS = 8
+	KEY_NOTIFY             = 16
+	KEY_CREATE_LINK        = 32
+	KEY_WRITE              = 0x20006
+	KEY_EXECUTE            = 0x20019
+	KEY_READ               = 0x20019
+	KEY_WOW64_64KEY        = 0x0100
+	KEY_WOW64_32KEY        = 0x0200
+	KEY_ALL_ACCESS         = 0xf003f
+)
+
+const (
+	REG_NONE = iota
+	REG_SZ
+	REG_EXPAND_SZ
+	REG_BINARY
+	REG_DWORD_LITTLE_ENDIAN
+	REG_DWORD_BIG_ENDIAN
+	REG_LINK
+	REG_MULTI_SZ
+	REG_RESOURCE_LIST
+	REG_FULL_RESOURCE_DESCRIPTOR
+	REG_RESOURCE_REQUIREMENTS_LIST
+	REG_QWORD_LITTLE_ENDIAN
+	REG_DWORD = REG_DWORD_LITTLE_ENDIAN
+	REG_QWORD = REG_QWORD_LITTLE_ENDIAN
+)

@@ -303,4 +303,14 @@ const (
 	SYS_PWRITEV                = 296
 	SYS_RT_TGSIGQUEUEINFO      = 297
 	SYS_PERF_EVENT_OPEN        = 298
+	SYS_RECVMMSG               = 299
+	SYS_FANOTIFY_INIT          = 300
+	SYS_FANOTIFY_MARK          = 301
+	SYS_PRLIMIT64              = 302
+	SYS_NAME_TO_HANDLE_AT      = 303
+	SYS_OPEN_BY_HANDLE_AT      = 304
+	SYS_CLOCK_ADJTIME          = 305
+	SYS_SYNCFS                 = 306
+	SYS_SENDMMSG               = 307
+	SYS_SETNS                  = 308
 )

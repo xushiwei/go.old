@@ -9,13 +9,23 @@ import (
 )
 
 // Errno is the Windows error number.
-type Errno uint64
+type Errno uintptr
 
-func (e Errno) Error() string { return Errstr(int(e)) }
+func (e Errno) Error() string {
+	return errstr(e)
+}
+
+func (e Errno) Temporary() bool {
+	return e == EINTR || e == EMFILE || e.Timeout()
+}
+
+func (e Errno) Timeout() bool {
+	return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT
+}
 
 // DLLError describes reasons for DLL load failures.
 type DLLError struct {
-	Errno   Errno
+	Err     error
 	ObjName string
 	Msg     string
 }
@@ -23,12 +33,13 @@ type DLLError struct {
 func (e *DLLError) Error() string { return e.Msg }
 
 // Implemented in ../runtime/windows/syscall.goc.
-func Syscall(trap, nargs, a1, a2, a3 uintptr) (r1, r2, err uintptr)
-func Syscall6(trap, nargs, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)
-func Syscall9(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) (r1, r2, err uintptr)
-func Syscall12(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12 uintptr) (r1, r2, err uintptr)
-func loadlibrary(filename *uint16) (handle, err uintptr)
-func getprocaddress(handle uintptr, procname *uint8) (proc, err uintptr)
+func Syscall(trap, nargs, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall6(trap, nargs, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall9(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall12(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall15(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 uintptr) (r1, r2 uintptr, err Errno)
+func loadlibrary(filename *uint16) (handle, err Errno)
+func getprocaddress(handle uintptr, procname *uint8) (proc uintptr, err Errno)
 
 // A DLL implements access to a single DLL.
 type DLL struct {
@@ -41,9 +52,9 @@ func LoadDLL(name string) (dll *DLL, err error) {
 	h, e := loadlibrary(StringToUTF16Ptr(name))
 	if e != 0 {
 		return nil, &DLLError{
-			Errno:   Errno(e),
+			Err:     e,
 			ObjName: name,
-			Msg:     "Failed to load " + name + ": " + Errstr(int(e)),
+			Msg:     "Failed to load " + name + ": " + e.Error(),
 		}
 	}
 	d := &DLL{
@@ -68,9 +79,9 @@ func (d *DLL) FindProc(name string) (proc *Proc, err error) {
 	a, e := getprocaddress(uintptr(d.Handle), StringBytePtr(name))
 	if e != 0 {
 		return nil, &DLLError{
-			Errno:   Errno(e),
+			Err:     e,
 			ObjName: name,
-			Msg:     "Failed to find " + name + " procedure in " + d.Name + ": " + Errstr(int(e)),
+			Msg:     "Failed to find " + name + " procedure in " + d.Name + ": " + e.Error(),
 		}
 	}
 	p := &Proc{
@@ -91,8 +102,8 @@ func (d *DLL) MustFindProc(name string) *Proc {
 }
 
 // Release unloads DLL d from memory.
-func (d *DLL) Release() (err Errno) {
-	return Errno(FreeLibrary(d.Handle))
+func (d *DLL) Release() (err error) {
+	return FreeLibrary(d.Handle)
 }
 
 // A Proc implements access to a procedure inside a DLL.
@@ -109,7 +120,7 @@ func (p *Proc) Addr() uintptr {
 }
 
 // Call executes procedure p with arguments a.
-func (p *Proc) Call(a ...uintptr) (r1, r2, err uintptr) {
+func (p *Proc) Call(a ...uintptr) (r1, r2 uintptr, err error) {
 	switch len(a) {
 	case 0:
 		return Syscall(p.Addr(), uintptr(len(a)), 0, 0, 0)
@@ -137,6 +148,12 @@ func (p *Proc) Call(a ...uintptr) (r1, r2, err uintptr) {
 		return Syscall12(p.Addr(), uintptr(len(a)), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], 0)
 	case 12:
 		return Syscall12(p.Addr(), uintptr(len(a)), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11])
+	case 13:
+		return Syscall15(p.Addr(), uintptr(len(a)), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], 0, 0)
+	case 14:
+		return Syscall15(p.Addr(), uintptr(len(a)), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], 0)
+	case 15:
+		return Syscall15(p.Addr(), uintptr(len(a)), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14])
 	default:
 		panic("Call " + p.Name + " with too many arguments " + itoa(len(a)) + ".")
 	}
@@ -241,7 +258,7 @@ func (p *LazyProc) Addr() uintptr {
 }
 
 // Call executes procedure p with arguments a.
-func (p *LazyProc) Call(a ...uintptr) (r1, r2, err uintptr) {
+func (p *LazyProc) Call(a ...uintptr) (r1, r2 uintptr, err error) {
 	p.mustFind()
 	return p.proc.Call(a...)
 }

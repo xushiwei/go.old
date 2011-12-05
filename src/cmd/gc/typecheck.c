@@ -210,6 +210,10 @@ reswitch:
 			}
 			n->used = 1;
 		}
+		if(!(top &Ecall) && isunsafebuiltin(n)) {
+			yyerror("%N is not an expression, must be called", n);
+			goto error;
+		}
 		ok |= Erv;
 		goto ret;
 
@@ -441,8 +445,8 @@ reswitch:
 			yyerror("invalid operation: %N (operator %O not defined on %s)", n, op, typekind(et));
 			goto error;
 		}
-		// okfor allows any array == array;
-		// restrict to slice == nil and nil == slice.
+		// okfor allows any array == array, map == map, func == func.
+		// restrict to slice/map/func == nil and nil == slice/map/func.
 		if(l->type->etype == TARRAY && !isslice(l->type))
 			goto notokfor;
 		if(r->type->etype == TARRAY && !isslice(r->type))
@@ -451,6 +455,15 @@ reswitch:
 			yyerror("invalid operation: %N (slice can only be compared to nil)", n);
 			goto error;
 		}
+		if(l->type->etype == TMAP && !isnil(l) && !isnil(r)) {
+			yyerror("invalid operation: %N (map can only be compared to nil)", n);
+			goto error;
+		}
+		if(l->type->etype == TFUNC && !isnil(l) && !isnil(r)) {
+			yyerror("invalid operation: %N (func can only be compared to nil)", n);
+			goto error;
+		}
+		
 		t = l->type;
 		if(iscmp[n->op]) {
 			evconst(n);
@@ -1032,6 +1045,7 @@ reswitch:
 			yyerror("first argument to append must be slice; have %lT", t);
 			goto error;
 		}
+
 		if(n->isddd) {
 			if(args->next == nil) {
 				yyerror("cannot use ... on first argument to append");
@@ -1713,7 +1727,6 @@ typecheckaste(int op, Node *call, int isddd, Type *tstruct, NodeList *nl, char *
 		for(tl=tstruct->type; tl; tl=tl->down) {
 			if(tl->isddd) {
 				for(; tn; tn=tn->down) {
-					exportassignok(tn->type, desc);
 					if(assignop(tn->type, tl->type->type, &why) == 0) {
 						if(call != N)
 							yyerror("cannot use %T as type %T in argument to %N%s", tn->type, tl->type, call, why);
@@ -1725,7 +1738,6 @@ typecheckaste(int op, Node *call, int isddd, Type *tstruct, NodeList *nl, char *
 			}
 			if(tn == T)
 				goto notenough;
-			exportassignok(tn->type, desc);
 			if(assignop(tn->type, tl->type, &why) == 0) {
 				if(call != N)
 					yyerror("cannot use %T as type %T in argument to %N%s", tn->type, tl->type, call, why);
@@ -1796,66 +1808,6 @@ toomany:
 		yyerror("too many arguments to %O", op);
 	goto out;
 }
-
-/*
- * do the export rules allow writing to this type?
- * cannot be implicitly assigning to any type with
- * an unavailable field.
- */
-int
-exportassignok(Type *t, char *desc)
-{
-	Type *f;
-	Sym *s;
-
-	if(t == T)
-		return 1;
-	if(t->trecur)
-		return 1;
-	t->trecur = 1;
-
-	switch(t->etype) {
-	default:
-		// most types can't contain others; they're all fine.
-		break;
-	case TSTRUCT:
-		for(f=t->type; f; f=f->down) {
-			if(f->etype != TFIELD)
-				fatal("structas: not field");
-			s = f->sym;
-			// s == nil doesn't happen for embedded fields (they get the type symbol).
-			// it only happens for fields in a ... struct.
-			if(s != nil && !exportname(s->name) && s->pkg != localpkg) {
-				char *prefix;
-
-				prefix = "";
-				if(desc != nil)
-					prefix = " in ";
-				else
-					desc = "";
-				yyerror("implicit assignment of unexported field '%s' of %T%s%s", s->name, t, prefix, desc);
-				goto no;
-			}
-			if(!exportassignok(f->type, desc))
-				goto no;
-		}
-		break;
-
-	case TARRAY:
-		if(t->bound < 0)	// slices are pointers; that's fine
-			break;
-		if(!exportassignok(t->type, desc))
-			goto no;
-		break;
-	}
-	t->trecur = 0;
-	return 1;
-
-no:
-	t->trecur = 0;
-	return 0;
-}
-
 
 /*
  * type check composite
@@ -2292,8 +2244,6 @@ typecheckas(Node *n)
 	if(n->right && n->right->type != T) {
 		if(n->left->type != T)
 			n->right = assignconv(n->right, n->left->type, "assignment");
-		else if(!isblank(n->left))
-			exportassignok(n->right->type, "assignment");
 	}
 	if(n->left->defn == n && n->left->ntype == N) {
 		defaultlit(&n->right, T);
@@ -2317,7 +2267,6 @@ checkassignto(Type *src, Node *dst)
 		yyerror("cannot assign %T to %lN in multiple assignment%s", src, dst, why);
 		return;
 	}
-	exportassignok(dst->type, "multiple assignment");
 }
 
 static void
@@ -2325,7 +2274,7 @@ typecheckas2(Node *n)
 {
 	int cl, cr;
 	NodeList *ll, *lr;
-	Node *l, *r, *rr;
+	Node *l, *r;
 	Iter s;
 	Type *t;
 
@@ -2364,16 +2313,7 @@ typecheckas2(Node *n)
 	if(cl == 1 && cr == 2 && l->op == OINDEXMAP) {
 		if(l->type == T)
 			goto out;
-		n->op = OAS2MAPW;
-		n->rlist->n = assignconv(r, l->type, "assignment");
-		rr = n->rlist->next->n;
-		n->rlist->next->n = assignconv(rr, types[TBOOL], "assignment");
-		if(isconst(rr, CTBOOL) && !rr->val.u.bval) {
-			n->op = ODELETE;
-			n->list = list(list1(l->left), l->right);
-			n->right = n->rlist->n;
-			n->rlist = nil;
-		}
+		yyerror("assignment count mismatch: %d = %d (use delete)", cl, cr);
 		goto out;
 	}
 
@@ -2525,6 +2465,7 @@ static void
 domethod(Node *n)
 {
 	Node *nt;
+	Type *t;
 
 	nt = n->type->nname;
 	typecheck(&nt, Etype);
@@ -2534,6 +2475,20 @@ domethod(Node *n)
 		n->type->nod = N;
 		return;
 	}
+	
+	// If we have
+	//	type I interface {
+	//		M(_ int)
+	//	}
+	// then even though I.M looks like it doesn't care about the
+	// value of its argument, a specific implementation of I may
+	// care.  The _ would suppress the assignment to that argument
+	// while generating a call, so remove it.
+	for(t=getinargx(nt->type)->type; t; t=t->down) {
+		if(t->sym != nil && strcmp(t->sym->name, "_") == 0)
+			t->sym = nil;
+	}
+
 	*n->type = *nt->type;
 	n->type->nod = N;
 	checkwidth(n->type);
@@ -2590,6 +2545,7 @@ copytype(Node *n, Type *t)
 	t->vargen = n->vargen;
 	t->siggen = 0;
 	t->method = nil;
+	t->xmethod = nil;
 	t->nod = N;
 	t->printed = 0;
 	t->deferwidth = 0;

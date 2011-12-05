@@ -82,12 +82,12 @@ func main() {
 		switch dir, err := os.Stat(path); {
 		case err != nil:
 			report(err)
-		case dir.IsRegular():
+		case dir.IsDir():
+			walkDir(path)
+		default:
 			if err := processFile(path, false); err != nil {
 				report(err)
 			}
-		case dir.IsDirectory():
-			walkDir(path)
 		}
 	}
 
@@ -109,7 +109,7 @@ func gofmtFile(f *ast.File) ([]byte, error) {
 	var buf bytes.Buffer
 
 	ast.SortImports(fset, f)
-	_, err := printConfig.Fprint(&buf, fset, f)
+	err := printConfig.Fprint(&buf, fset, f)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ var gofmtBuf bytes.Buffer
 
 func gofmt(n interface{}) string {
 	gofmtBuf.Reset()
-	_, err := printConfig.Fprint(&gofmtBuf, fset, n)
+	err := printConfig.Fprint(&gofmtBuf, fset, n)
 	if err != nil {
 		return "<" + err.Error() + ">"
 	}
@@ -219,7 +219,7 @@ func walkDir(path string) {
 	filepath.Walk(path, visitFile)
 }
 
-func visitFile(path string, f *os.FileInfo, err error) error {
+func visitFile(path string, f os.FileInfo, err error) error {
 	if err == nil && isGoFile(f) {
 		err = processFile(path, false)
 	}
@@ -229,9 +229,10 @@ func visitFile(path string, f *os.FileInfo, err error) error {
 	return nil
 }
 
-func isGoFile(f *os.FileInfo) bool {
+func isGoFile(f os.FileInfo) bool {
 	// ignore non-Go files
-	return f.IsRegular() && !strings.HasPrefix(f.Name, ".") && strings.HasSuffix(f.Name, ".go")
+	name := f.Name()
+	return !f.IsDir() && !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".go")
 }
 
 func diff(b1, b2 []byte) (data []byte, err error) {

@@ -6,10 +6,11 @@ include ../../../Make.inc
 
 TARG=exp/terminal
 GOFILES=\
-	shell.go\
+	terminal.go\
 
 ifneq ($(GOOS),windows)
-GOFILES+=terminal.go
+GOFILES+=\
+	util.go
 endif
 
 include ../../../Make.pkg

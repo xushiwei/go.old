@@ -38,7 +38,6 @@ import (
 	"log"
 	"net/http"
 	_ "net/http/pprof" // to serve /debug/pprof/*
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -142,10 +141,10 @@ func dosync(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		// sync failed because no files changed;
 		// don't change the package tree
-		syncDelay.set(*syncMin) //  revert to regular sync schedule
+		syncDelay.set(time.Duration(*syncMin) * time.Minute) //  revert to regular sync schedule
 	default:
 		// sync failed because of an error - back off exponentially, but try at least once a day
-		syncDelay.backoff(24 * 60)
+		syncDelay.backoff(24 * time.Hour)
 	}
 }
 
@@ -165,8 +164,6 @@ func loggingHandler(h http.Handler) http.Handler {
 }
 
 func remoteSearch(query string) (res *http.Response, err error) {
-	search := "/search?f=text&q=" + url.QueryEscape(query)
-
 	// list of addresses to try
 	var addrs []string
 	if *serverAddr != "" {
@@ -180,6 +177,7 @@ func remoteSearch(query string) (res *http.Response, err error) {
 	}
 
 	// remote search
+	search := remoteSearchURL(query, *html)
 	for _, addr := range addrs {
 		url := "http://" + addr + search
 		res, err = http.Get(url)
@@ -330,10 +328,11 @@ func main() {
 				for {
 					dosync(nil, nil)
 					delay, _ := syncDelay.get()
+					dt := delay.(time.Duration)
 					if *verbose {
-						log.Printf("next sync in %dmin", delay.(int))
+						log.Printf("next sync in %s", dt)
 					}
-					time.Sleep(int64(delay.(int)) * 60e9)
+					time.Sleep(dt)
 				}
 			}()
 		}

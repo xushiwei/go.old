@@ -810,14 +810,16 @@ walkswitch(Node *sw)
 void
 typecheckswitch(Node *n)
 {
-	int top, lno;
-	Type *t;
+	int top, lno, ptr;
+	char *nilonly;
+	Type *t, *missing, *have;
 	NodeList *l, *ll;
 	Node *ncase, *nvar;
 	Node *def;
 
 	lno = lineno;
 	typechecklist(n->ninit, Etop);
+	nilonly = nil;
 
 	if(n->ntest != N && n->ntest->op == OTYPESW) {
 		// type switch
@@ -835,6 +837,16 @@ typecheckswitch(Node *n)
 			t = n->ntest->type;
 		} else
 			t = types[TBOOL];
+		if(t) {
+			if(!okforeq[t->etype] || isfixedarray(t))
+				yyerror("cannot switch on %lN", n->ntest);
+			else if(t->etype == TARRAY)
+				nilonly = "slice";
+			else if(t->etype == TFUNC)
+				nilonly = "func";
+			else if(t->etype == TMAP)
+				nilonly = "map";
+		}
 	}
 	n->type = t;
 
@@ -854,21 +866,37 @@ typecheckswitch(Node *n)
 				typecheck(&ll->n, Erv | Etype);
 				if(ll->n->type == T || t == T)
 					continue;
+				setlineno(ncase);
 				switch(top) {
 				case Erv:	// expression switch
 					defaultlit(&ll->n, t);
 					if(ll->n->op == OTYPE)
 						yyerror("type %T is not an expression", ll->n->type);
-					else if(ll->n->type != T && !eqtype(ll->n->type, t))
-						yyerror("case %lN in %T switch", ll->n, t);
+					else if(ll->n->type != T && !assignop(ll->n->type, t, nil) && !assignop(t, ll->n->type, nil)) {
+						if(n->ntest)
+							yyerror("invalid case %N in switch on %N (mismatched types %T and %T)", ll->n, n->ntest, ll->n->type, t);
+						else
+							yyerror("invalid case %N in switch (mismatched types %T and bool)", ll->n, n->ntest, ll->n->type, t);
+					} else if(nilonly && !isconst(ll->n, CTNIL)) {
+						yyerror("invalid case %N in switch (can only compare %s %N to nil)", ll->n, nilonly, n->ntest);
+					}
 					break;
 				case Etype:	// type switch
 					if(ll->n->op == OLITERAL && istype(ll->n->type, TNIL)) {
 						;
-					} else if(ll->n->op != OTYPE && ll->n->type != T) {
+					} else if(ll->n->op != OTYPE && ll->n->type != T) {  // should this be ||?
 						yyerror("%lN is not a type", ll->n);
 						// reset to original type
 						ll->n = n->ntest->right;
+					} else if(!implements(ll->n->type, t, &missing, &have, &ptr)) {
+						if(have && !missing->broke && !have->broke)
+							yyerror("impossible type switch case: %lN cannot have dynamic type %T"
+								" (wrong type for %S method)\n\thave %S%hT\n\twant %S%hT",
+								n->ntest->right, ll->n->type, missing->sym, have->sym, have->type,
+								missing->sym, missing->type);
+						else if(!missing->broke)
+							yyerror("impossible type switch case: %lN cannot have dynamic type %T"
+								" (missing %S method)", n->ntest->right, ll->n->type, missing->sym);
 					}
 					break;
 				}

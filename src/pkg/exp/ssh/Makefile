@@ -7,13 +7,15 @@ include ../../../Make.inc
 TARG=exp/ssh
 GOFILES=\
 	channel.go\
+	cipher.go\
 	client.go\
 	client_auth.go\
 	common.go\
 	messages.go\
-	transport.go\
 	server.go\
 	server_shell.go\
 	session.go\
+	tcpip.go\
+	transport.go\
 
 include ../../../Make.pkg

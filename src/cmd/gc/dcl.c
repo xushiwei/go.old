@@ -573,7 +573,7 @@ funchdr(Node *n)
 static void
 funcargs(Node *nt)
 {
-	Node *n;
+	Node *n, *nn;
 	NodeList *l;
 	int gen;
 
@@ -615,6 +615,10 @@ funcargs(Node *nt)
 			n->left->ntype = n->right;
 			if(isblank(n->left)) {
 				// Give it a name so we can assign to it during return.
+				// preserve the original in ->orig
+				nn = nod(OXXX, N, N);
+				*nn = *n->left;
+				n->left = nn;
 				snprint(namebuf, sizeof(namebuf), ".anon%d", gen++);
 				n->left->sym = lookup(namebuf);
 			}
@@ -667,41 +671,6 @@ typedcl1(Node *n, Node *t, int local)
 	n->ntype = t;
 	n->local = local;
 	return nod(ODCLTYPE, n, N);
-}
-
-/*
- * typedcl1 but during imports
- */
-void
-typedcl2(Type *pt, Type *t)
-{
-	Node *n;
-
-	// override declaration in unsafe.go for Pointer.
-	// there is no way in Go code to define unsafe.Pointer
-	// so we have to supply it.
-	if(incannedimport &&
-	   strcmp(importpkg->name, "unsafe") == 0 &&
-	   strcmp(pt->nod->sym->name, "Pointer") == 0) {
-		t = types[TUNSAFEPTR];
-	}
-
-	if(pt->etype == TFORW)
-		goto ok;
-	if(!eqtype(pt->orig, t))
-		yyerror("inconsistent definition for type %S during import\n\t%lT\n\t%lT", pt->sym, pt->orig, t);
-	return;
-
-ok:
-	n = pt->nod;
-	copytype(pt->nod, t);
-	// unzero nod
-	pt->nod = n;
-
-	pt->sym->lastlineno = parserline();
-	declare(n, PEXTERN);
-
-	checkwidth(pt);
 }
 
 /*
@@ -767,7 +736,6 @@ structfield(Node *n)
 		break;
 	}
 
-	// tofunarg will undo this for _ arguments
 	if(n->left && n->left->op == ONAME) {
 		f->nname = n->left;
 		f->embedded = n->embedded;
@@ -835,13 +803,6 @@ tofunargs(NodeList *l)
 
 	for(tp = &t->type; l; l=l->next) {
 		f = structfield(l->n);
-
-		// Unlink the name for _ arguments.
-		if(l->n->left && l->n->left->op == ONAME && isblank(l->n->left)) {
-			f->nname = nil;
-			f->sym = nil;
-			f->embedded = 0;
-		}
 
 		// esc.c needs to find f given a PPARAM to add the tag.
 		if(l->n->left && l->n->left->class == PPARAM)
@@ -1342,6 +1303,3 @@ funccompile(Node *n, int isclosure)
 	funcdepth = 0;
 	dclcontext = PEXTERN;
 }
-
-
-

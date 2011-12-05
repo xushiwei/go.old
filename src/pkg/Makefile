@@ -80,9 +80,8 @@ DIRS=\
 	exp/ebnf\
 	exp/ebnflint\
 	exp/gotype\
-	exp/gui\
-	exp/gui/x11\
 	exp/norm\
+	exp/ssh\
 	exp/spdy\
 	exp/sql\
 	exp/sql/driver\
@@ -187,6 +186,7 @@ DIRS=\
 ifeq ($(GOOS),linux)
 DIRS+=\
 	exp/inotify\
+	exp/terminal\
 
 endif
 
@@ -202,8 +202,6 @@ NOTEST+=\
 	crypto/openpgp/error\
 	crypto/x509/pkix\
 	exp/ebnflint\
-	exp/gui\
-	exp/gui/x11\
 	go/doc\
 	hash\
 	image/bmp\

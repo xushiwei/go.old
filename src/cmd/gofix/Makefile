@@ -10,6 +10,7 @@ GOFILES=\
 	filepath.go\
 	fix.go\
 	go1pkgrename.go\
+	hashsum.go\
 	htmlerr.go\
 	httpfinalurl.go\
 	httpfs.go\
@@ -31,6 +32,8 @@ GOFILES=\
 	sorthelpers.go\
 	sortslice.go\
 	stringssplit.go\
+	template.go\
+	timefileinfo.go\
 	typecheck.go\
 	url.go\
 

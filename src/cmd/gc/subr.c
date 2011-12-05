@@ -119,7 +119,7 @@ yyerrorl(int line, char *fmt, ...)
 
 	hcrash();
 	nerrors++;
-	if(nerrors >= 10 && !debug['e']) {
+	if(nsavederrors+nerrors >= 10 && !debug['e']) {
 		flusherrors();
 		print("%L: too many errors\n", line);
 		errorexit();
@@ -187,7 +187,7 @@ yyerror(char *fmt, ...)
 
 	hcrash();
 	nerrors++;
-	if(nerrors >= 10 && !debug['e']) {
+	if(nsavederrors+nerrors >= 10 && !debug['e']) {
 		flusherrors();
 		print("%L: too many errors\n", parserline());
 		errorexit();
@@ -547,6 +547,8 @@ maptype(Type *key, Type *val)
 		switch(key->etype) {
 		case TARRAY:
 		case TSTRUCT:
+		case TMAP:
+		case TFUNC:
 			yyerror("invalid map key type %T", key);
 			break;
 		case TFORW:
@@ -1016,9 +1018,6 @@ eqtypenoname(Type *t1, Type *t2)
 // Is type src assignment compatible to type dst?
 // If so, return op code to use in conversion.
 // If not, return 0.
-//
-// It is the caller's responsibility to call exportassignok
-// to check for assignments to other packages' unexported fields,
 int
 assignop(Type *src, Type *dst, char **why)
 {
@@ -1178,19 +1177,19 @@ convertop(Type *src, Type *dst, char **why)
 	if(isint[src->etype] && dst->etype == TSTRING)
 		return ORUNESTR;
 
-	if(isslice(src) && src->sym == nil && dst->etype == TSTRING) {
-		if(eqtype(src->type, bytetype))
+	if(isslice(src) && dst->etype == TSTRING) {
+		if(src->type->etype == bytetype->etype)
 			return OARRAYBYTESTR;
-		if(eqtype(src->type, runetype))
+		if(src->type->etype == runetype->etype)
 			return OARRAYRUNESTR;
 	}
 	
 	// 7. src is a string and dst is []byte or []rune.
 	// String to slice.
-	if(src->etype == TSTRING && isslice(dst) && dst->sym == nil) {
-		if(eqtype(dst->type, bytetype))
+	if(src->etype == TSTRING && isslice(dst)) {
+		if(dst->type->etype == bytetype->etype)
 			return OSTRARRAYBYTE;
-		if(eqtype(dst->type, runetype))
+		if(dst->type->etype == runetype->etype)
 			return OSTRARRAYRUNE;
 	}
 	
@@ -1223,7 +1222,6 @@ assignconv(Node *n, Type *t, char *context)
 	if(t->etype == TBLANK)
 		return n;
 
-	exportassignok(n->type, context);
 	if(eqtype(n->type, t))
 		return n;
 
@@ -2228,13 +2226,12 @@ structargs(Type **tl, int mustname)
 	gen = 0;
 	for(t = structfirst(&savet, tl); t != T; t = structnext(&savet)) {
 		n = N;
-		if(t->sym)
-			n = newname(t->sym);
-		else if(mustname) {
-			// have to give it a name so we can refer to it in trampoline
+		if(mustname && (t->sym == nil || strcmp(t->sym->name, "_") == 0)) {
+			// invent a name so that we can refer to it in the trampoline
 			snprint(buf, sizeof buf, ".anon%d", gen++);
 			n = newname(lookup(buf));
-		}
+		} else if(t->sym)
+			n = newname(t->sym);
 		a = nod(ODCLFIELD, n, typenod(t->type));
 		a->isddd = t->isddd;
 		if(n != N)
@@ -2276,7 +2273,7 @@ genwrapper(Type *rcvr, Type *method, Sym *newnam, int iface)
 	int isddd;
 	Val v;
 
-	if(0 && debug['r'])
+	if(debug['r'])
 		print("genwrapper rcvrtype=%T method=%T newnam=%S\n",
 			rcvr, method, newnam);
 

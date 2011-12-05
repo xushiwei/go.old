@@ -97,7 +97,7 @@ func (cfg *TypeConfig) typeof(name string) string {
 // looked for in the Embed list.
 type Type struct {
 	Field  map[string]string // map field name to type
-	Method map[string]string // map method name to comma-separated return types
+	Method map[string]string // map method name to comma-separated return types (should start with "func ")
 	Embed  []string          // list of types this type embeds (for extra methods)
 	Def    string            // definition of named type
 }
@@ -138,6 +138,7 @@ func typecheck(cfg *TypeConfig, f *ast.File) (typeof map[interface{}]string, ass
 	assign = make(map[string][]interface{})
 	cfg1 := &TypeConfig{}
 	*cfg1 = *cfg // make copy so we can add locally
+	copied := false
 
 	// gather function declarations
 	for _, decl := range f.Decls {
@@ -185,7 +186,8 @@ func typecheck(cfg *TypeConfig, f *ast.File) (typeof map[interface{}]string, ass
 					if cfg1.Type[s.Name.Name] != nil {
 						break
 					}
-					if cfg1.Type == cfg.Type || cfg1.Type == nil {
+					if !copied {
+						copied = true
 						// Copy map lazily: it's time.
 						cfg1.Type = make(map[string]*Type)
 						for k, v := range cfg.Type {

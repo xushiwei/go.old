@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,9 +35,9 @@ type delayTime struct {
 	RWValue
 }
 
-func (dt *delayTime) backoff(max int) {
+func (dt *delayTime) backoff(max time.Duration) {
 	dt.mutex.Lock()
-	v := dt.value.(int) * 2
+	v := dt.value.(time.Duration) * 2
 	if v > max {
 		v = max
 	}
@@ -206,7 +207,7 @@ func updateFilterFile() {
 	// update filter file
 	if err := writeFileAtomically(*filter, buf.Bytes()); err != nil {
 		log.Printf("writeFileAtomically(%s): %s", *filter, err)
-		filterDelay.backoff(24 * 60) // back off exponentially, but try at least once a day
+		filterDelay.backoff(24 * time.Hour) // back off exponentially, but try at least once a day
 	} else {
 		filterDelay.set(*filterMin) // revert to regular filter update schedule
 	}
@@ -229,7 +230,7 @@ func initDirTrees() {
 
 	// start filter update goroutine, if enabled.
 	if *filter != "" && *filterMin > 0 {
-		filterDelay.set(*filterMin) // initial filter update delay
+		filterDelay.set(time.Duration(*filterMin) * time.Minute) // initial filter update delay
 		go func() {
 			for {
 				if *verbose {
@@ -237,10 +238,11 @@ func initDirTrees() {
 				}
 				updateFilterFile()
 				delay, _ := filterDelay.get()
+				dt := delay.(time.Duration)
 				if *verbose {
-					log.Printf("next filter update in %dmin", delay.(int))
+					log.Printf("next filter update in %s", dt)
 				}
-				time.Sleep(int64(delay.(int)) * 60e9)
+				time.Sleep(dt)
 			}
 		}()
 	}
@@ -379,17 +381,17 @@ func filenameFunc(path string) string {
 	return localname
 }
 
-func fileInfoNameFunc(fi FileInfo) string {
+func fileInfoNameFunc(fi os.FileInfo) string {
 	name := fi.Name()
-	if fi.IsDirectory() {
+	if fi.IsDir() {
 		name += "/"
 	}
 	return name
 }
 
-func fileInfoTimeFunc(fi FileInfo) string {
-	if t := fi.Mtime_ns(); t != 0 {
-		return time.SecondsToLocalTime(t / 1e9).String()
+func fileInfoTimeFunc(fi os.FileInfo) string {
+	if t := fi.ModTime(); t.Unix() != 0 {
+		return t.Local().String()
 	}
 	return "" // don't return epoch if time is obviously not set
 }
@@ -787,7 +789,7 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if dir != nil && dir.IsDirectory() {
+	if dir != nil && dir.IsDir() {
 		if redirect(w, r) {
 			return
 		}
@@ -824,6 +826,7 @@ const (
 	noFiltering PageInfoMode = 1 << iota // do not filter exports
 	showSource                           // show source code, do not extract documentation
 	noHtml                               // show result in textual form, do not generate HTML
+	flatDir                              // show directory in a flat (non-indented) manner
 )
 
 // modeNames defines names for each PageInfoMode flag.
@@ -831,18 +834,39 @@ var modeNames = map[string]PageInfoMode{
 	"all":  noFiltering,
 	"src":  showSource,
 	"text": noHtml,
+	"flat": flatDir,
 }
 
 // getPageInfoMode computes the PageInfoMode flags by analyzing the request
 // URL form value "m". It is value is a comma-separated list of mode names
 // as defined by modeNames (e.g.: m=src,text).
-func getPageInfoMode(r *http.Request) (mode PageInfoMode) {
+func getPageInfoMode(r *http.Request) PageInfoMode {
+	var mode PageInfoMode
 	for _, k := range strings.Split(r.FormValue("m"), ",") {
 		if m, found := modeNames[strings.TrimSpace(k)]; found {
 			mode |= m
 		}
 	}
-	return
+	return adjustPageInfoMode(r, mode)
+}
+
+// Specialized versions of godoc may adjust the PageInfoMode by overriding
+// this variable.
+var adjustPageInfoMode = func(_ *http.Request, mode PageInfoMode) PageInfoMode {
+	return mode
+}
+
+// remoteSearchURL returns the search URL for a given query as needed by
+// remoteSearch. If html is set, an html result is requested; otherwise
+// the result is in textual form.
+// Adjust this function as necessary if modeNames or FormValue parameters
+// change.
+func remoteSearchURL(query string, html bool) string {
+	s := "/search?m=text&q="
+	if html {
+		s = "/search?q="
+	}
+	return s + url.QueryEscape(query)
 }
 
 type PageInfo struct {
@@ -853,9 +877,10 @@ type PageInfo struct {
 	PDoc     *doc.PackageDoc // nil if no single package documentation
 	Examples []*doc.Example  // nil if no example code
 	Dirs     *DirList        // nil if no directory information
-	DirTime  int64           // directory time stamp in seconds since epoch
+	DirTime  time.Time       // directory time stamp
+	DirFlat  bool            // if set, show directory in a flat (non-indented) manner
 	IsPkg    bool            // false if this is not documenting a real package
-	Err      error           // directory read error or nil
+	Err      error           // I/O error or nil
 }
 
 func (info *PageInfo) IsEmpty() bool {
@@ -869,22 +894,8 @@ type httpHandler struct {
 }
 
 // fsReadDir implements ReadDir for the go/build package.
-func fsReadDir(dir string) ([]*os.FileInfo, error) {
-	fi, err := fs.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert []FileInfo to []*os.FileInfo.
-	osfi := make([]*os.FileInfo, len(fi))
-	for i, f := range fi {
-		mode := uint32(S_IFREG)
-		if f.IsDirectory() {
-			mode = S_IFDIR
-		}
-		osfi[i] = &os.FileInfo{Name: f.Name(), Size: f.Size(), Mtime_ns: f.Mtime_ns(), Mode: mode}
-	}
-	return osfi, nil
+func fsReadDir(dir string) ([]os.FileInfo, error) {
+	return fs.ReadDir(dir)
 }
 
 // fsReadFile implements ReadFile for the go/build package.
@@ -944,7 +955,7 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 	}
 
 	// filter function to select the desired .go files
-	filter := func(d FileInfo) bool {
+	filter := func(d os.FileInfo) bool {
 		// Only Go files.
 		if !isPkgFile(d) {
 			return false
@@ -1023,7 +1034,7 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 
 	// get examples from *_test.go files
 	var examples []*doc.Example
-	filter = func(d FileInfo) bool {
+	filter = func(d os.FileInfo) bool {
 		return isGoFile(d) && strings.HasSuffix(d.Name(), "_test.go")
 	}
 	if testpkgs, err := parseDir(fset, abspath, filter); err != nil {
@@ -1051,7 +1062,7 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 
 	// get directory information
 	var dir *Directory
-	var timestamp int64
+	var timestamp time.Time
 	if tree, ts := fsTree.get(); tree != nil && tree.(*Directory) != nil {
 		// directory tree is present; lookup respective directory
 		// (may still fail if the file system was updated and the
@@ -1088,10 +1099,22 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		// note: cannot use path filter here because in general
 		//       it doesn't contain the fsTree path
 		dir = newDirectory(abspath, nil, 1)
-		timestamp = time.Seconds()
+		timestamp = time.Now()
 	}
 
-	return PageInfo{abspath, plist, fset, past, pdoc, examples, dir.listing(true), timestamp, h.isPkg, nil}
+	return PageInfo{
+		Dirname:  abspath,
+		PList:    plist,
+		FSet:     fset,
+		PAst:     past,
+		PDoc:     pdoc,
+		Examples: examples,
+		Dirs:     dir.listing(true),
+		DirTime:  timestamp,
+		DirFlat:  mode&flatDir != 0,
+		IsPkg:    h.isPkg,
+		Err:      nil,
+	}
 }
 
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1136,7 +1159,7 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		title = "Directory " + relativeURL(info.Dirname)
 		if *showTimestamps {
-			subtitle = "Last update: " + time.SecondsToLocalTime(info.DirTime).String()
+			subtitle = "Last update: " + info.DirTime.String()
 		}
 	}
 
@@ -1202,7 +1225,7 @@ func lookup(query string) (result SearchResult) {
 
 	// is the result accurate?
 	if *indexEnabled {
-		if _, ts := fsModified.get(); timestamp < ts {
+		if _, ts := fsModified.get(); timestamp.Before(ts) {
 			// The index is older than the latest file system change under godoc's observation.
 			result.Alert = "Indexing in progress: result may be inaccurate"
 		}
@@ -1250,7 +1273,7 @@ func invalidateIndex() {
 func indexUpToDate() bool {
 	_, fsTime := fsModified.get()
 	_, siTime := searchIndex.get()
-	return fsTime <= siTime
+	return !fsTime.After(siTime)
 }
 
 // feedDirnames feeds the directory names of all directories
@@ -1307,12 +1330,12 @@ func updateIndex() {
 	if *verbose {
 		log.Printf("updating index...")
 	}
-	start := time.Nanoseconds()
+	start := time.Now()
 	index := NewIndex(fsDirnames(), *maxResults > 0, *indexThrottle)
-	stop := time.Nanoseconds()
+	stop := time.Now()
 	searchIndex.set(index)
 	if *verbose {
-		secs := float64((stop-start)/1e6) / 1e3
+		secs := stop.Sub(start).Seconds()
 		stats := index.Stats()
 		log.Printf("index updated (%gs, %d bytes of source, %d files, %d lines, %d unique words, %d spots)",
 			secs, stats.Bytes, stats.Files, stats.Lines, stats.Words, stats.Spots)
@@ -1336,10 +1359,10 @@ func indexer() {
 			// index possibly out of date - make a new one
 			updateIndex()
 		}
-		var delay int64 = 60 * 1e9 // by default, try every 60s
+		delay := 60 * time.Second // by default, try every 60s
 		if *testDir != "" {
 			// in test mode, try once a second for fast startup
-			delay = 1 * 1e9
+			delay = 1 * time.Second
 		}
 		time.Sleep(delay)
 	}

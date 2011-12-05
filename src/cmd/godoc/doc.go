@@ -80,6 +80,10 @@ The flags are:
 		repository holding the source files.
 	-sync_minutes=0
 		sync interval in minutes; sync is disabled if <= 0
+	-templates=""
+		directory containing alternate template files; if set,
+		the directory may provide alternative template files
+		for the files in $GOROOT/lib/godoc
 	-filter=""
 		filter file containing permitted package directory paths
 	-filter_minutes=0
@@ -130,10 +134,11 @@ The presentation mode of web pages served by godoc can be controlled with the
 	all	show documentation for all (not just exported) declarations
 	src	show the original source code rather then the extracted documentation
 	text	present the page in textual (command-line) form rather than HTML
+	flat	present flat (not indented) directory listings using full paths
 
-For instance, http://golang.org/pkg/big/?m=all,text shows the documentation for
-all (not just the exported) declarations of package big, in textual form (as
-it would appear when using godoc from the command line: "godoc -src big .*").
+For instance, http://golang.org/pkg/math/big/?m=all,text shows the documentation
+for all (not just the exported) declarations of package big, in textual form (as
+it would appear when using godoc from the command line: "godoc -src math/big .*").
 
 By default, godoc serves files from the file system of the underlying OS.
 Instead, a .zip file may be provided via the -zip flag, which contains

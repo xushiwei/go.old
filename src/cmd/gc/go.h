@@ -16,6 +16,12 @@
 
 #undef	BUFSIZ
 
+// The parser's maximum stack size.
+// We have to use a #define macro here since yacc
+// or bison will check for its definition and use
+// a potentially smaller value if it is undefined.
+#define YYMAXDEPTH 500
+
 enum
 {
 	NHUNK		= 50000,
@@ -23,7 +29,6 @@ enum
 	NSYMB		= 500,
 	NHASH		= 1024,
 	STRINGSZ	= 200,
-	YYMAXDEPTH	= 500,
 	MAXALIGN	= 7,
 	UINF		= 100,
 	HISTSZ		= 10,
@@ -425,7 +430,7 @@ enum
 	OAPPEND,
 	OARRAYBYTESTR, OARRAYRUNESTR,
 	OSTRARRAYBYTE, OSTRARRAYRUNE,
-	OAS, OAS2, OAS2MAPW, OAS2FUNC, OAS2RECV, OAS2MAPR, OAS2DOTTYPE,
+	OAS, OAS2, OAS2FUNC, OAS2RECV, OAS2MAPR, OAS2DOTTYPE,
 	OASOP,
 	OBAD,
 	OCALL, OCALLFUNC, OCALLMETH, OCALLINTER,
@@ -959,7 +964,6 @@ Type*	tointerface(NodeList *l);
 Type*	tostruct(NodeList *l);
 Node*	typedcl0(Sym *s);
 Node*	typedcl1(Node *n, Node *t, int local);
-void	typedcl2(Type *pt, Type *t);
 Node*	typenod(Type *t);
 NodeList*	variter(NodeList *vl, Node *t, NodeList *el);
 
@@ -1234,7 +1238,6 @@ void	walkswitch(Node *sw);
 /*
  *	typecheck.c
  */
-int	exportassignok(Type *t, char *desc);
 int	islvalue(Node *n);
 Node*	typecheck(Node **np, int top);
 void	typechecklist(NodeList *l, int top);
@@ -1247,6 +1250,7 @@ void	queuemethod(Node *n);
 /*
  *	unsafe.c
  */
+int	isunsafebuiltin(Node *n);
 Node*	unsafenmagic(Node *n);
 
 /*
