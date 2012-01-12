@@ -6,6 +6,8 @@
 // to update builtin.c.boot.  This is not done automatically
 // to avoid depending on having a working compiler binary.
 
+// +build ignore
+
 package PACKAGE
 
 // emitted by compiler, not referred to by go programs
@@ -52,7 +54,7 @@ func stringtoslicebyte(string) []byte
 func stringtoslicerune(string) []rune
 func stringiter(string, int) int
 func stringiter2(string, int) (retk int, retv rune)
-func slicecopy(to any, fr any, wid uint32) int
+func copy(to any, fr any, wid uint32) int
 func slicestringcopy(to any, fr any) int
 
 // interface conversions
@@ -79,6 +81,8 @@ func ifaceeq(i1 any, i2 any) (ret bool)
 func efaceeq(i1 any, i2 any) (ret bool)
 func ifacethash(i1 any) (ret uint32)
 func efacethash(i1 any) (ret uint32)
+
+func equal(typ *byte, x1, x2 any) (ret bool)
 
 // *byte is really *runtime.Type
 func makemap(mapType *byte, hint int64) (hmap map[any]any)
@@ -118,6 +122,13 @@ func sliceslice(old []any, lb uint64, hb uint64, width uint64) (ary []any)
 func slicearray(old *any, nel uint64, lb uint64, hb uint64, width uint64) (ary []any)
 
 func closure() // has args, but compiler fills in
+
+func memequal(eq *bool, size uintptr, x, y *any)
+func memequal8(eq *bool, size uintptr, x, y *any)
+func memequal16(eq *bool, size uintptr, x, y *any)
+func memequal32(eq *bool, size uintptr, x, y *any)
+func memequal64(eq *bool, size uintptr, x, y *any)
+func memequal128(eq *bool, size uintptr, x, y *any)
 
 // only used on 32-bit
 func int64div(int64, int64) int64

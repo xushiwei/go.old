@@ -14,7 +14,9 @@ package math
 // Special cases are:
 //	Hypot(p, q) = +Inf if p or q is infinite
 //	Hypot(p, q) = NaN if p or q is NaN
-func Hypot(p, q float64) float64 {
+func Hypot(p, q float64) float64
+
+func hypot(p, q float64) float64 {
 	// TODO(rsc): Remove manual inlining of IsNaN, IsInf
 	// when compiler does it for us
 	// special cases

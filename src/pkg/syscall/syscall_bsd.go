@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin freebsd openbsd
+// +build darwin freebsd netbsd openbsd
 
 // BSD system call wrappers shared by *BSD based systems
 // including OS X (Darwin) and FreeBSD.  Like the other
@@ -520,15 +520,6 @@ func Sendmsg(fd int, p, oob []byte, to Sockaddr, flags int) (err error) {
 		return
 	}
 	return
-}
-
-// TODO:
-// FreeBSD has IP_SENDIF.  Darwin probably needs BSDLLCTest, see:
-// http://developer.apple.com/mac/library/samplecode/BSDLLCTest/index.html
-
-// BindToDevice binds the socket associated with fd to device.
-func BindToDevice(fd int, device string) (err error) {
-	return ENOSYS
 }
 
 //sys	kevent(kq int, change uintptr, nchange int, event uintptr, nevent int, timeout *Timespec) (n int, err error)

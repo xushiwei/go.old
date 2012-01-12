@@ -8,12 +8,16 @@ TARG=tmpltohtml
 GOFILES=\
 	tmpltohtml.go\
 
-all: tmpltohtml go_tutorial.html effective_go.html
+HTML=\
+	articles/defer_panic_recover.html\
+	articles/error_handling.html\
+	effective_go.html\
+	go1.html\
+	go_tutorial.html\
 
-go_tutorial.html: go_tutorial.tmpl tmpltohtml
-	./makehtml go_tutorial.tmpl
+all: tmpltohtml $(HTML)
 
-effective_go.html: effective_go.tmpl tmpltohtml
-	./makehtml effective_go.tmpl
+%.html: %.tmpl tmpltohtml
+	./makehtml $*.tmpl
 
 include ../src/Make.cmd

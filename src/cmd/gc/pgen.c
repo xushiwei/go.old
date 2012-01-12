@@ -70,6 +70,8 @@ compile(Node *fn)
 
 	nodconst(&nod1, types[TINT32], 0);
 	ptxt = gins(ATEXT, isblank(curfn->nname) ? N : curfn->nname, &nod1);
+	if(fn->dupok)
+		ptxt->TEXTFLAG = DUPOK;
 	afunclit(&ptxt->from);
 
 	ginit();

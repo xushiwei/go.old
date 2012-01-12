@@ -132,6 +132,7 @@ exprcmp(Case *c1, Case *c2)
 		n = mpcmpfltflt(n1->val.u.fval, n2->val.u.fval);
 		break;
 	case CTINT:
+	case CTRUNE:
 		n = mpcmpfixfix(n1->val.u.xval, n2->val.u.xval);
 		break;
 	case CTSTR:
@@ -380,6 +381,7 @@ mkcaselist(Node *sw, int arg)
 			switch(consttype(n->left)) {
 			case CTFLT:
 			case CTINT:
+			case CTRUNE:
 			case CTSTR:
 				c->type = Texprconst;
 			}
@@ -876,7 +878,7 @@ typecheckswitch(Node *n)
 						if(n->ntest)
 							yyerror("invalid case %N in switch on %N (mismatched types %T and %T)", ll->n, n->ntest, ll->n->type, t);
 						else
-							yyerror("invalid case %N in switch (mismatched types %T and bool)", ll->n, n->ntest, ll->n->type, t);
+							yyerror("invalid case %N in switch (mismatched types %T and bool)", ll->n, ll->n->type);
 					} else if(nilonly && !isconst(ll->n, CTNIL)) {
 						yyerror("invalid case %N in switch (can only compare %s %N to nil)", ll->n, nilonly, n->ntest);
 					}

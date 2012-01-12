@@ -7,9 +7,12 @@ package math
 // Floor returns the greatest integer value less than or equal to x.
 //
 // Special cases are:
+//	Floor(±0) = ±0
 //	Floor(±Inf) = ±Inf
 //	Floor(NaN) = NaN
-func Floor(x float64) float64 {
+func Floor(x float64) float64
+
+func floor(x float64) float64 {
 	// TODO(rsc): Remove manual inlining of IsNaN, IsInf
 	// when compiler does it for us
 	if x == 0 || x != x || x > MaxFloat64 || x < -MaxFloat64 { // x == 0 || IsNaN(x) || IsInf(x, 0)
@@ -29,16 +32,24 @@ func Floor(x float64) float64 {
 // Ceil returns the least integer value greater than or equal to x.
 //
 // Special cases are:
+//	Ceil(±0) = ±0
 //	Ceil(±Inf) = ±Inf
 //	Ceil(NaN) = NaN
-func Ceil(x float64) float64 { return -Floor(-x) }
+func Ceil(x float64) float64
+
+func ceil(x float64) float64 {
+	return -Floor(-x)
+}
 
 // Trunc returns the integer value of x.
 //
 // Special cases are:
+//	Trunc(±0) = ±0
 //	Trunc(±Inf) = ±Inf
 //	Trunc(NaN) = NaN
-func Trunc(x float64) float64 {
+func Trunc(x float64) float64
+
+func trunc(x float64) float64 {
 	// TODO(rsc): Remove manual inlining of IsNaN, IsInf
 	// when compiler does it for us
 	if x == 0 || x != x || x > MaxFloat64 || x < -MaxFloat64 { // x == 0 || IsNaN(x) || IsInf(x, 0)

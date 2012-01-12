@@ -1,4 +1,6 @@
 <!-- A Tutorial for the Go Programming Language -->
+{{donotedit}}
+
 <h2>Introduction</h2>
 <p>
 This document is a tutorial introduction to the basics of the Go programming
@@ -9,11 +11,8 @@ After you've read this tutorial, you should look at
 <a href='/doc/effective_go.html'>Effective Go</a>,
 which digs deeper into how the language is used and
 talks about the style and idioms of programming in Go.
-Also, slides from a 3-day course about Go are available.
-They provide some background and a lot of examples:
-<a href='/doc/GoCourseDay1.pdf'>Day 1</a>,
-<a href='/doc/GoCourseDay2.pdf'>Day 2</a>,
-<a href='/doc/GoCourseDay3.pdf'>Day 3</a>.
+An interactive introduction to Go is available, called
+<a href='http://tour.golang.org/'>A Tour of Go</a>.
 <p>
 The presentation here proceeds through a series of modest programs to illustrate
 key features of the language.  All the programs work (at time of writing) and are
@@ -288,19 +287,21 @@ Using slices one can write this function (from <code>sum.go</code>):
 Note how the return type (<code>int</code>) is defined for <code>sum</code> by stating it
 after the parameter list.
 <p>
-To call the function, we slice the array.  This intricate call (we'll show
+To call the function, we slice the array.  This code (we'll show
 a simpler way in a moment) constructs
 an array and slices it:
 <p>
 <pre>
-s := sum([3]int{1,2,3}[:])
+x := [3]int{1,2,3}
+s := sum(x[:])
 </pre>
 <p>
 If you are creating a regular array but want the compiler to count the
 elements for you, use <code>...</code> as the array size:
 <p>
 <pre>
-s := sum([...]int{1,2,3}[:])
+x := [...]int{1,2,3}
+s := sum(x[:])
 </pre>
 <p>
 That's fussier than necessary, though.
@@ -418,8 +419,9 @@ assigned to a variable.
 <p>
 <h2>An I/O Package</h2>
 <p>
-Next we'll look at a simple package for doing file I/O with an
-open/close/read/write interface.  Here's the start of <code>file.go</code>:
+Next we'll look at a simple package for doing Unix file I/O with an
+open/close/read/write interface.
+Here's the start of <code>file.go</code>:
 <p>
 {{code "progs/file.go" `/package/` `/^}/`}}
 <p>
@@ -432,6 +434,11 @@ and reproduce the rudiments of its file I/O.
 <p>
 The other item is the low-level, external <code>syscall</code> package, which provides
 a primitive interface to the underlying operating system's calls.
+The <code>syscall</code> package is very system-dependent, and the way it's
+used here works only on Unix-like systems,
+but the general ideas explored here apply broadly.
+(A Windows version is available in
+<a href="progs/file_windows.go"><code>file_windows.go</code></a>.)
 <p>
 Next is a type definition: the <code>type</code> keyword introduces a type declaration,
 in this case a data structure called <code>File</code>.

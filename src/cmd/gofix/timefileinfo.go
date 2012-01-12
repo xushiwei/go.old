@@ -30,13 +30,13 @@ http://codereview.appspot.com/5416060
 
 var timefileinfoTypeConfig = &TypeConfig{
 	Type: map[string]*Type{
-		"os.File": &Type{
+		"os.File": {
 			Method: map[string]string{
 				"Readdir": "func() []*os.FileInfo",
 				"Stat":    "func() (*os.FileInfo, error)",
 			},
 		},
-		"time.Time": &Type{
+		"time.Time": {
 			Method: map[string]string{
 				"Seconds":     "time.raw",
 				"Nanoseconds": "time.raw",
@@ -69,7 +69,7 @@ var timefileinfoTypeConfig = &TypeConfig{
 //
 func timefileinfoIsOld(f *ast.File, typeof map[interface{}]string) bool {
 	old := false
-	
+
 	// called records the expressions that appear as
 	// the function part of a function call, so that
 	// we can distinguish a ref to the possibly new time.UTC

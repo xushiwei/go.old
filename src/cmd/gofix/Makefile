@@ -10,14 +10,17 @@ GOFILES=\
 	filepath.go\
 	fix.go\
 	go1pkgrename.go\
+	googlecode.go\
 	hashsum.go\
 	htmlerr.go\
 	httpfinalurl.go\
 	httpfs.go\
 	httpheaders.go\
 	httpserver.go\
+	httputil.go\
 	imagecolor.go\
 	imagenew.go\
+	imageycbcr.go\
 	iocopyn.go\
 	main.go\
 	mapdelete.go\
@@ -31,6 +34,7 @@ GOFILES=\
 	signal.go\
 	sorthelpers.go\
 	sortslice.go\
+	strconv.go\
 	stringssplit.go\
 	template.go\
 	timefileinfo.go\

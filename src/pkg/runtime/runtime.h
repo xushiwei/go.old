@@ -43,7 +43,6 @@ typedef int32		intptr;
  */
 typedef	uint8			bool;
 typedef	uint8			byte;
-typedef	struct	Alg		Alg;
 typedef	struct	Func		Func;
 typedef	struct	G		G;
 typedef	struct	Gobuf		Gobuf;
@@ -242,7 +241,7 @@ struct	M
 	uint32	waitsemacount;
 	uint32	waitsemalock;
 
-#ifdef __WINDOWS__
+#ifdef GOOS_windows
 	void*	thread;		// thread handle
 #endif
 	uintptr	end[];
@@ -259,13 +258,6 @@ struct	Stktop
 	uint8*	argp;	// pointer to arguments in old frame
 	uintptr	free;	// if free>0, call stackfree using free as size
 	bool	panic;	// is this frame the top of a panic?
-};
-struct	Alg
-{
-	uintptr	(*hash)(uint32, void*);
-	uint32	(*equal)(uint32, void*, void*);
-	void	(*print)(uint32, void*);
-	void	(*copy)(uint32, void*, void*);
 };
 struct	SigTab
 {
@@ -307,7 +299,7 @@ struct	WinCall
 	uintptr	err;	// error number
 };
 
-#ifdef __WINDOWS__
+#ifdef GOOS_windows
 enum {
    Windows = 1
 };
@@ -356,31 +348,72 @@ struct	Timer
 /*
  * known to compiler
  */
+enum {
+	Structrnd = sizeof(uintptr)
+};
+
+/*
+ * type algorithms - known to compiler
+ */
 enum
 {
 	AMEM,
-	ANOEQ,
-	ASTRING,
-	AINTER,
-	ANILINTER,
-	ASLICE,
 	AMEM8,
 	AMEM16,
 	AMEM32,
 	AMEM64,
 	AMEM128,
+	ANOEQ,
 	ANOEQ8,
 	ANOEQ16,
 	ANOEQ32,
 	ANOEQ64,
 	ANOEQ128,
+	ASTRING,
+	AINTER,
+	ANILINTER,
+	ASLICE,
 	Amax
 };
-
-
-enum {
-	Structrnd = sizeof(uintptr)
+typedef	struct	Alg		Alg;
+struct	Alg
+{
+	void	(*hash)(uintptr*, uintptr, void*);
+	void	(*equal)(bool*, uintptr, void*, void*);
+	void	(*print)(uintptr, void*);
+	void	(*copy)(uintptr, void*, void*);
 };
+
+extern	Alg	runtime·algarray[Amax];
+
+void	runtime·memhash(uintptr*, uintptr, void*);
+void	runtime·nohash(uintptr*, uintptr, void*);
+void	runtime·strhash(uintptr*, uintptr, void*);
+void	runtime·interhash(uintptr*, uintptr, void*);
+void	runtime·nilinterhash(uintptr*, uintptr, void*);
+
+void	runtime·memequal(bool*, uintptr, void*, void*);
+void	runtime·noequal(bool*, uintptr, void*, void*);
+void	runtime·strequal(bool*, uintptr, void*, void*);
+void	runtime·interequal(bool*, uintptr, void*, void*);
+void	runtime·nilinterequal(bool*, uintptr, void*, void*);
+
+void	runtime·memprint(uintptr, void*);
+void	runtime·strprint(uintptr, void*);
+void	runtime·interprint(uintptr, void*);
+void	runtime·nilinterprint(uintptr, void*);
+
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·memcopy8(uintptr, void*, void*);
+void	runtime·memcopy16(uintptr, void*, void*);
+void	runtime·memcopy32(uintptr, void*, void*);
+void	runtime·memcopy64(uintptr, void*, void*);
+void	runtime·memcopy128(uintptr, void*, void*);
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·strcopy(uintptr, void*, void*);
+void	runtime·algslicecopy(uintptr, void*, void*);
+void	runtime·intercopy(uintptr, void*, void*);
+void	runtime·nilintercopy(uintptr, void*, void*);
 
 /*
  * deferred subroutine calls
@@ -410,7 +443,6 @@ struct Panic
 /*
  * external data
  */
-extern	Alg	runtime·algarray[Amax];
 extern	String	runtime·emptystring;
 G*	runtime·allg;
 G*	runtime·lastg;
@@ -498,8 +530,6 @@ bool	runtime·ifaceeq_c(Iface, Iface);
 bool	runtime·efaceeq_c(Eface, Eface);
 uintptr	runtime·ifacehash(Iface);
 uintptr	runtime·efacehash(Eface);
-uintptr	runtime·nohash(uint32, void*);
-uint32	runtime·noequal(uint32, void*, void*);
 void*	runtime·malloc(uintptr size);
 void	runtime·free(void *v);
 bool	runtime·addfinalizer(void*, void(*fn)(void*), int32);
@@ -605,7 +635,8 @@ void	runtime·futexwakeup(uint32*, uint32);
  * low level C-called
  */
 uint8*	runtime·mmap(byte*, uintptr, int32, int32, int32, uint32);
-void	runtime·munmap(uint8*, uintptr);
+void	runtime·munmap(byte*, uintptr);
+void	runtime·madvise(byte*, uintptr, int32);
 void	runtime·memclr(byte*, uintptr);
 void	runtime·setcallerpc(void*, void*);
 void*	runtime·getcallerpc(void*);

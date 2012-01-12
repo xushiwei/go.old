@@ -201,7 +201,7 @@ func splitQuoted(s string) (r []string, err error) {
 	arg := make([]rune, len(s))
 	escaped := false
 	quoted := false
-	quote := rune(0)
+	quote := '\x00'
 	i := 0
 	for _, r := range s {
 		switch {
@@ -355,7 +355,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 				// with enum-derived constants.  Otherwise
 				// in the cgo -godefs output half the constants
 				// are in hex and half are in whatever the #define used.
-				i, err := strconv.Btoi64(n.Define, 0)
+				i, err := strconv.ParseInt(n.Define, 0, 64)
 				if err == nil {
 					n.Const = fmt.Sprintf("%#x", i)
 				} else {
@@ -729,7 +729,9 @@ func (p *Package) gccMachine() []string {
 	return nil
 }
 
-var gccTmp = objDir + "_cgo_.o"
+func gccTmp() string {
+	return *objDir + "_cgo_.o"
+}
 
 // gccCmd returns the gcc command line to use for compiling
 // the input.
@@ -738,7 +740,7 @@ func (p *Package) gccCmd() []string {
 		p.gccName(),
 		"-Wall",                             // many warnings
 		"-Werror",                           // warnings are errors
-		"-o" + gccTmp,                       // write object to tmp
+		"-o" + gccTmp(),                     // write object to tmp
 		"-gdwarf-2",                         // generate DWARF v2 debugging symbols
 		"-fno-eliminate-unused-debug-types", // gets rid of e.g. untyped enum otherwise
 		"-c",                                // do not link
@@ -755,10 +757,10 @@ func (p *Package) gccCmd() []string {
 func (p *Package) gccDebug(stdin []byte) (*dwarf.Data, binary.ByteOrder, []byte) {
 	runGcc(stdin, p.gccCmd())
 
-	if f, err := macho.Open(gccTmp); err == nil {
+	if f, err := macho.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		var data []byte
 		if f.Symtab != nil {
@@ -784,23 +786,23 @@ func (p *Package) gccDebug(stdin []byte) (*dwarf.Data, binary.ByteOrder, []byte)
 	// Can skip debug data block in ELF and PE for now.
 	// The DWARF information is complete.
 
-	if f, err := elf.Open(gccTmp); err == nil {
+	if f, err := elf.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		return d, f.ByteOrder, nil
 	}
 
-	if f, err := pe.Open(gccTmp); err == nil {
+	if f, err := pe.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		return d, binary.LittleEndian, nil
 	}
 
-	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE object", gccTmp)
+	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE object", gccTmp())
 	panic("not reached")
 }
 
@@ -1304,7 +1306,7 @@ func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
 	var gr []*ast.Field
 	if _, ok := dtype.ReturnType.(*dwarf.VoidType); !ok && dtype.ReturnType != nil {
 		r = c.Type(dtype.ReturnType)
-		gr = []*ast.Field{&ast.Field{Type: r.Go}}
+		gr = []*ast.Field{{Type: r.Go}}
 	}
 	return &FuncType{
 		Params: p,
@@ -1333,7 +1335,7 @@ func (c *typeConv) Opaque(n int64) ast.Expr {
 func (c *typeConv) intExpr(n int64) ast.Expr {
 	return &ast.BasicLit{
 		Kind:  token.INT,
-		Value: strconv.Itoa64(n),
+		Value: strconv.FormatInt(n, 10),
 	}
 }
 

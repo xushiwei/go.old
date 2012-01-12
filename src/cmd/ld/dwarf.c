@@ -775,7 +775,7 @@ enum {
 	KindNoPointers = 1<<7,
 
 	// size of Type interface header + CommonType structure.
-	CommonSize = 2*PtrSize+ 4*PtrSize + 8,
+	CommonSize = 2*PtrSize+ 5*PtrSize + 8,
 };
 
 static Reloc*
@@ -1439,7 +1439,7 @@ defdwsymb(Sym* sym, char *s, int t, vlong v, vlong size, int ver, Sym *gotype)
 	if (strncmp(s, "go.string.", 10) == 0)
 		return;
 
-	if (strncmp(s, "type.", 5) == 0 && strcmp(s, "type.*") != 0) {
+	if (strncmp(s, "type.", 5) == 0 && strcmp(s, "type.*") != 0 && strncmp(s, "type..", 6) != 0) {
 		defgotype(sym);
 		return;
 	}

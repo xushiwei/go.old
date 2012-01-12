@@ -11,12 +11,13 @@ GOFILES=\
 	path.go\
 	syslist.go\
 
-CLEANFILES+=syslist.go pkgtest/_obj cmdtest/_obj cgotest/_obj
+CLEANFILES+=pkgtest/_obj cmdtest/_obj cgotest/_obj
 
 include ../../../Make.pkg
 
 syslist.go: ../../../Make.inc Makefile
 	echo '// Generated automatically by make.' >$@
 	echo 'package build' >>$@
+	echo >>$@
 	echo 'const goosList = "$(GOOS_LIST)"' >>$@
 	echo 'const goarchList = "$(GOARCH_LIST)"' >>$@

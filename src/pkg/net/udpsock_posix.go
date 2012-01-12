@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin freebsd linux openbsd windows
+// +build darwin freebsd linux netbsd openbsd windows
 
 // UDP sockets
 
@@ -238,16 +238,6 @@ func ListenUDP(net string, laddr *UDPAddr) (c *UDPConn, err error) {
 		return nil, e
 	}
 	return newUDPConn(fd), nil
-}
-
-// BindToDevice binds a UDPConn to a network interface.
-func (c *UDPConn) BindToDevice(device string) error {
-	if !c.ok() {
-		return os.EINVAL
-	}
-	c.fd.incref()
-	defer c.fd.decref()
-	return os.NewSyscallError("setsockopt", syscall.BindToDevice(c.fd.sysfd, device))
 }
 
 // File returns a copy of the underlying os.File, set to blocking mode.

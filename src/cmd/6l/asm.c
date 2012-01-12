@@ -44,6 +44,7 @@
 char linuxdynld[] = "/lib64/ld-linux-x86-64.so.2";
 char freebsddynld[] = "/libexec/ld-elf.so.1";
 char openbsddynld[] = "/usr/libexec/ld.so";
+char netbsddynld[] = "/libexec/ld.elf_so";
 
 char	zeroes[32];
 
@@ -95,6 +96,7 @@ enum {
 	ElfStrPlt,
 	ElfStrGnuVersion,
 	ElfStrGnuVersionR,
+	ElfStrNoteNetbsdIdent,
 	NElfStr
 };
 
@@ -558,7 +560,7 @@ doelf(void)
 {
 	Sym *s, *shstrtab, *dynstr;
 
-	if(HEADTYPE != Hlinux && HEADTYPE != Hfreebsd && HEADTYPE != Hopenbsd)
+	if(HEADTYPE != Hlinux && HEADTYPE != Hfreebsd && HEADTYPE != Hopenbsd && HEADTYPE != Hnetbsd)
 		return;
 
 	/* predefine strings we need for section headers */
@@ -570,6 +572,8 @@ doelf(void)
 	elfstr[ElfStrText] = addstring(shstrtab, ".text");
 	elfstr[ElfStrData] = addstring(shstrtab, ".data");
 	elfstr[ElfStrBss] = addstring(shstrtab, ".bss");
+	if(HEADTYPE == Hnetbsd)
+		elfstr[ElfStrNoteNetbsdIdent] = addstring(shstrtab, ".note.netbsd.ident");
 	addstring(shstrtab, ".elfdata");
 	addstring(shstrtab, ".rodata");
 	addstring(shstrtab, ".gosymtab");
@@ -703,7 +707,7 @@ asmb(void)
 {
 	int32 magic;
 	int a, dynsym;
-	vlong vl, startva, symo, dwarfoff, machlink;
+	vlong vl, startva, symo, dwarfoff, machlink, resoff;
 	ElfEhdr *eh;
 	ElfPhdr *ph, *pph;
 	ElfShdr *sh;
@@ -763,6 +767,7 @@ asmb(void)
 		break;
 	case Hlinux:
 	case Hfreebsd:
+	case Hnetbsd:
 	case Hopenbsd:
 		debug['8'] = 1;	/* 64-bit addresses */
 		/* index of elf text section; needed by asmelfsym, double-checked below */
@@ -773,6 +778,8 @@ asmb(void)
 			if(elfverneed)
 				elftextsh += 2;
 		}
+		if(HEADTYPE == Hnetbsd)
+			elftextsh += 1;
 		break;
 	case Hwindows:
 		break;
@@ -798,6 +805,7 @@ asmb(void)
 			break;
 		case Hlinux:
 		case Hfreebsd:
+		case Hnetbsd:
 		case Hopenbsd:
 			symo = rnd(HEADR+segtext.len, INITRND)+segdata.filelen;
 			symo = rnd(symo, INITRND);
@@ -867,11 +875,13 @@ asmb(void)
 		break;
 	case Hlinux:
 	case Hfreebsd:
+	case Hnetbsd:
 	case Hopenbsd:
 		/* elf amd-64 */
 
 		eh = getElfEhdr();
 		startva = INITTEXT - HEADR;
+		resoff = ELFRESERVE;
 
 		/* This null SHdr must appear before all others */
 		newElfShdr(elfstr[ElfStrEmpty]);
@@ -910,15 +920,31 @@ asmb(void)
 				case Hfreebsd:
 					interpreter = freebsddynld;
 					break;
+				case Hnetbsd:
+					interpreter = netbsddynld;
+					break;
 				case Hopenbsd:
 					interpreter = openbsddynld;
 					break;
 				}
 			}
-			elfinterp(sh, startva, interpreter);
+			resoff -= elfinterp(sh, startva, resoff, interpreter);
 
 			ph = newElfPhdr();
 			ph->type = PT_INTERP;
+			ph->flags = PF_R;
+			phsh(ph, sh);
+		}
+
+		if(HEADTYPE == Hnetbsd) {
+			sh = newElfShdr(elfstr[ElfStrNoteNetbsdIdent]);
+			sh->type = SHT_NOTE;
+			sh->flags = SHF_ALLOC;
+			sh->addralign = 4;
+			resoff -= elfnetbsdsig(sh, startva, resoff);
+
+			ph = newElfPhdr();
+			ph->type = PT_NOTE;
 			ph->flags = PF_R;
 			phsh(ph, sh);
 		}
@@ -927,7 +953,7 @@ asmb(void)
 		elfphload(&segdata);
 
 		/* Dynamic linking sections */
-		if (!debug['d']) {	/* -d suppresses dynamic loader format */
+		if(!debug['d']) {	/* -d suppresses dynamic loader format */
 			/* S headers for dynamic linking */
 			sh = newElfShdr(elfstr[ElfStrGot]);
 			sh->type = SHT_PROGBITS;
@@ -1051,7 +1077,7 @@ asmb(void)
 		for(sect=segdata.sect; sect!=nil; sect=sect->next)
 			elfshbits(sect);
 
-		if (!debug['s']) {
+		if(!debug['s']) {
 			sh = newElfShdr(elfstr[ElfStrSymtab]);
 			sh->type = SHT_SYMTAB;
 			sh->off = symo;
@@ -1076,6 +1102,8 @@ asmb(void)
 		eh->ident[EI_MAG3] = 'F';
 		if(HEADTYPE == Hfreebsd)
 			eh->ident[EI_OSABI] = ELFOSABI_FREEBSD;
+		else if(HEADTYPE == Hnetbsd)
+			eh->ident[EI_OSABI] = ELFOSABI_NETBSD;
 		else if(HEADTYPE == Hopenbsd)
 			eh->ident[EI_OSABI] = ELFOSABI_OPENBSD;
 		eh->ident[EI_CLASS] = ELFCLASS64;
@@ -1095,7 +1123,9 @@ asmb(void)
 		a += elfwritehdr();
 		a += elfwritephdrs();
 		a += elfwriteshdrs();
-		a += elfwriteinterp();
+		a += elfwriteinterp(elfstr[ElfStrInterp]);
+		if(HEADTYPE == Hnetbsd)
+			a += elfwritenetbsdsig(elfstr[ElfStrNoteNetbsdIdent]);
 		if(a > ELFRESERVE)	
 			diag("ELFRESERVE too small: %d > %d", a, ELFRESERVE);
 		break;

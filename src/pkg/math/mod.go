@@ -13,9 +13,14 @@ package math
 // sign agrees with that of x.
 //
 // Special cases are:
-//	if x is not finite, Mod returns NaN
-//	if y is 0 or NaN, Mod returns NaN
-func Mod(x, y float64) float64 {
+//	Mod(±Inf, y) = NaN
+//	Mod(NaN, y) = NaN
+//	Mod(x, 0) = NaN
+//	Mod(x, ±Inf) = x
+//	Mod(x, NaN) = NaN
+func Mod(x, y float64) float64
+
+func mod(x, y float64) float64 {
 	// TODO(rsc): Remove manual inlining of IsNaN, IsInf
 	// when compiler does it for us.
 	if y == 0 || x > MaxFloat64 || x < -MaxFloat64 || x != x || y != y { // y == 0 || IsInf(x, 0) || IsNaN(x) || IsNan(y)

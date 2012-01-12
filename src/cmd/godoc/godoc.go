@@ -26,6 +26,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ----------------------------------------------------------------------------
@@ -105,6 +107,7 @@ func registerPublicHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/doc/codewalk/", codewalk)
 	mux.HandleFunc("/search", search)
 	mux.Handle("/robots.txt", fileServer)
+	mux.HandleFunc("/opensearch.xml", serveSearchDesc)
 	mux.HandleFunc("/", serveFile)
 }
 
@@ -456,18 +459,49 @@ func comment_htmlFunc(comment string) string {
 	var buf bytes.Buffer
 	// TODO(gri) Provide list of words (e.g. function parameters)
 	//           to be emphasized by ToHTML.
-	doc.ToHTML(&buf, []byte(comment), nil) // does html-escaping
+	doc.ToHTML(&buf, comment, nil) // does html-escaping
 	return buf.String()
+}
+
+// punchCardWidth is the number of columns of fixed-width
+// characters to assume when wrapping text.  Very few people
+// use terminals or cards smaller than 80 characters, so 80 it is.
+// We do not try to sniff the environment or the tty to adapt to
+// the situation; instead, by using a constant we make sure that
+// godoc always produces the same output regardless of context,
+// a consistency that is lost otherwise.  For example, if we sniffed
+// the environment or tty, then http://golang.org/pkg/math/?m=text
+// would depend on the width of the terminal where godoc started,
+// which is clearly bogus.  More generally, the Unix tools that behave
+// differently when writing to a tty than when writing to a file have
+// a history of causing confusion (compare `ls` and `ls | cat`), and we
+// want to avoid that mistake here.
+const punchCardWidth = 80
+
+func comment_textFunc(comment, indent, preIndent string) string {
+	var buf bytes.Buffer
+	doc.ToText(&buf, comment, indent, preIndent, punchCardWidth-2*len(indent))
+	return buf.String()
+}
+
+func startsWithUppercase(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsUpper(r)
 }
 
 func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.FileSet) string {
 	var buf bytes.Buffer
 	for _, eg := range examples {
-		// accept Foo or Foo_.* for funcName == Foo
 		name := eg.Name
-		if i := strings.Index(name, "_"); i >= 0 {
-			name = name[:i]
+
+		// strip lowercase braz in Foo_braz or Foo_Bar_braz from name 
+		// while keeping uppercase Braz in Foo_Braz
+		if i := strings.LastIndex(name, "_"); i != -1 {
+			if i < len(name)-1 && !startsWithUppercase(name[i+1:]) {
+				name = name[:i]
+			}
 		}
+
 		if name != funcName {
 			continue
 		}
@@ -555,6 +589,7 @@ var fmap = template.FuncMap{
 	"node":         nodeFunc,
 	"node_html":    node_htmlFunc,
 	"comment_html": comment_htmlFunc,
+	"comment_text": comment_textFunc,
 
 	// support for URL attributes
 	"pkgLink":     pkgLinkFunc,
@@ -600,7 +635,8 @@ var (
 	packageHTML,
 	packageText,
 	searchHTML,
-	searchText *template.Template
+	searchText,
+	searchDescXML *template.Template
 )
 
 func readTemplates() {
@@ -615,6 +651,7 @@ func readTemplates() {
 	packageText = readTemplate("package.txt")
 	searchHTML = readTemplate("search.html")
 	searchText = readTemplate("search.txt")
+	searchDescXML = readTemplate("opensearch.xml")
 }
 
 // ----------------------------------------------------------------------------
@@ -809,6 +846,16 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 	fileServer.ServeHTTP(w, r)
 }
 
+func serveSearchDesc(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/opensearchdescription+xml")
+	data := map[string]interface{}{
+		"BaseURL": fmt.Sprintf("http://%s", r.Host),
+	}
+	if err := searchDescXML.Execute(w, &data); err != nil {
+		log.Printf("searchDescXML.Execute: %s", err)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // Packages
 
@@ -912,16 +959,6 @@ func inList(name string, list []string) bool {
 		}
 	}
 	return false
-}
-
-func stripFunctionBodies(pkg *ast.Package) {
-	for _, f := range pkg.Files {
-		for _, d := range f.Decls {
-			if f, ok := d.(*ast.FuncDecl); ok {
-				f.Body = nil
-			}
-		}
-	}
 }
 
 // getPageInfo returns the PageInfo for a package directory abspath. If the
@@ -1049,13 +1086,17 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 	var past *ast.File
 	var pdoc *doc.PackageDoc
 	if pkg != nil {
-		if mode&noFiltering == 0 {
-			ast.PackageExports(pkg)
-		}
+		exportsOnly := mode&noFiltering == 0
 		if mode&showSource == 0 {
-			stripFunctionBodies(pkg)
-			pdoc = doc.NewPackageDoc(pkg, path.Clean(relpath)) // no trailing '/' in importpath
+			// show extracted documentation
+			pdoc = doc.NewPackageDoc(pkg, path.Clean(relpath), exportsOnly) // no trailing '/' in importpath
 		} else {
+			// show source code
+			// TODO(gri) Consider eliminating export filtering in this mode,
+			//           or perhaps eliminating the mode altogether.
+			if exportsOnly {
+				ast.PackageExports(pkg)
+			}
 			past = ast.MergePackageFiles(pkg, ast.FilterUnassociatedComments)
 		}
 	}

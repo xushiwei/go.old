@@ -519,17 +519,11 @@ func (pc *persistConn) readLoop() {
 
 	for alive {
 		pb, err := pc.br.Peek(1)
-		if err != nil {
-			if remoteSideClosed(err) && !pc.expectingResponse() {
-				// Remote side closed on us.  (We probably hit their
-				// max idle timeout)
-				pc.close()
-				return
-			}
-		}
 		if !pc.expectingResponse() {
-			log.Printf("Unsolicited response received on idle HTTP channel starting with %q; err=%v",
-				string(pb), err)
+			if len(pb) > 0 {
+				log.Printf("Unsolicited response received on idle HTTP channel starting with %q; err=%v",
+					string(pb), err)
+			}
 			pc.close()
 			return
 		}
@@ -545,12 +539,13 @@ func (pc *persistConn) readLoop() {
 		resp, err := ReadResponse(pc.br, rc.req)
 
 		if err == nil {
-			if rc.addedGzip && resp.Header.Get("Content-Encoding") == "gzip" {
+			hasBody := rc.req.Method != "HEAD" && resp.ContentLength != 0
+			if rc.addedGzip && hasBody && resp.Header.Get("Content-Encoding") == "gzip" {
 				resp.Header.Del("Content-Encoding")
 				resp.Header.Del("Content-Length")
 				resp.ContentLength = -1
 				gzReader, zerr := gzip.NewReader(resp.Body)
-				if err != nil {
+				if zerr != nil {
 					pc.close()
 					err = zerr
 				} else {

@@ -16,7 +16,13 @@
 //	{{code "foo.go" `/^func.main/` `/^}/`
 //
 // Patterns can be `/regular expression/`, a decimal number, or "$"
-// to signify the end of the file.
+// to signify the end of the file. In multi-line matches,
+// lines that end with the four characters
+//	OMIT
+// are omitted from the output, making it easy to provide marker
+// lines in the input that will not appear in the output but are easy
+// to identify by pattern.
+
 package main
 
 import (
@@ -25,6 +31,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
@@ -35,6 +42,11 @@ func Usage() {
 	os.Exit(2)
 }
 
+var templateFuncs = template.FuncMap{
+	"code":      code,
+	"donotedit": donotedit,
+}
+
 func main() {
 	flag.Usage = Usage
 	flag.Parse()
@@ -43,8 +55,8 @@ func main() {
 	}
 
 	// Read and parse the input.
-	name := flag.Args()[0]
-	tmpl := template.New(name).Funcs(template.FuncMap{"code": code})
+	name := flag.Arg(0)
+	tmpl := template.New(filepath.Base(name)).Funcs(templateFuncs)
 	if _, err := tmpl.ParseFiles(name); err != nil {
 		log.Fatal(err)
 	}
@@ -78,6 +90,11 @@ func format(arg interface{}) string {
 		log.Fatalf("unrecognized argument: %v type %T", arg, arg)
 	}
 	return ""
+}
+
+func donotedit() string {
+	// No editing please.
+	return fmt.Sprintf("<!--\n  DO NOT EDIT: created by\n    tmpltohtml %s\n-->\n", flag.Args()[0])
 }
 
 func code(file string, arg ...interface{}) (string, error) {
@@ -142,6 +159,11 @@ func multipleLines(file, text string, arg1, arg2 interface{}) string {
 		line2 = match(file, line1, lines, pattern2)
 	} else if line2 < line1 {
 		log.Fatalf("lines out of order for %q: %d %d", text, line1, line2)
+	}
+	for k := line1 - 1; k < line2; k++ {
+		if strings.HasSuffix(lines[k], "OMIT\n") {
+			lines[k] = ""
+		}
 	}
 	return strings.Join(lines[line1-1:line2], "")
 }

@@ -7,14 +7,16 @@ include ../../Make.inc
 TARG=go
 GOFILES=\
 	build.go\
-	clean.go\
 	fix.go\
 	get.go\
 	fmt.go\
 	help.go\
 	list.go\
 	main.go\
+	pkg.go\
+	run.go\
 	test.go\
+	testflag.go\
 	version.go\
 	vet.go\
 

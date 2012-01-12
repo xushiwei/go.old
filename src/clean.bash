@@ -22,7 +22,9 @@ rm -f "$GOROOT"/lib/*.a
 for i in lib9 libbio libmach cmd pkg \
 	../misc/cgo/gmp ../misc/cgo/stdio \
 	../misc/cgo/life ../misc/cgo/test \
-	../test/bench ../test/garbage
+	../misc/dashboard/builder ../misc/goplay\
+	../doc/codelab/wiki\
+	../test/bench/shootout ../test/bench/garbage ../test/bench/go1
 do
 	# Do not use gomake here. It may not be available.
 	$MAKE -C "$GOROOT/src/$i" clean

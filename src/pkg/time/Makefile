@@ -8,7 +8,6 @@ TARG=time
 GOFILES=\
 	format.go\
 	sleep.go\
-	sys.go\
 	tick.go\
 	time.go\
 	zoneinfo.go\
@@ -22,6 +21,10 @@ GOFILES_darwin=\
 	zoneinfo_unix.go\
 
 GOFILES_linux=\
+	sys_unix.go\
+	zoneinfo_unix.go\
+
+GOFILES_netbsd=\
 	sys_unix.go\
 	zoneinfo_unix.go\
 

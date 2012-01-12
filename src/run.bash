@@ -31,23 +31,53 @@ xcd() {
 }
 
 if $rebuild; then
+	if $USE_GO_TOOL; then
+		echo
+		echo '# Package builds'
+		time go install -a std
+	else
+		(xcd pkg
+			gomake clean
+			time gomake install
+		) || exit $?
+	fi
+fi
+
+if $USE_GO_TOOL; then
+	echo
+	echo '# Package tests'
+	time go test std -short
+else
 	(xcd pkg
-		gomake clean
-		time gomake install
+	gomake testshort
 	) || exit $?
 fi
 
-(xcd pkg
-gomake testshort
-) || exit $?
+if $USE_GO_TOOL; then
+	echo
+	echo '# runtime -cpu=1,2,4'
+	go test runtime -short -cpu=1,2,4
+else
+	(xcd pkg/runtime;
+	gotest -short -cpu=1,2,4
+	) || exit $?
+fi
 
-(xcd pkg/runtime;
-gotest -short -cpu=1,2,4
-) || exit $?
+if $USE_GO_TOOL; then
+	echo
+	echo '# sync -cpu=10'
+	go test sync -short -cpu=10
+else
+	(xcd pkg/sync;
+	GOMAXPROCS=10 gomake testshort
+	) || exit $?
+fi
 
-(xcd pkg/sync;
-GOMAXPROCS=10 gomake testshort
-) || exit $?
+if $USE_GO_TOOL; then
+	echo
+	echo '# Build bootstrap scripts'
+	./buildscript.sh
+fi
 
 (xcd pkg/exp/ebnflint
 time gomake test
@@ -78,8 +108,7 @@ gotest
 [ "$GOHOSTOS" == darwin ] ||
 (xcd ../misc/cgo/testso
 gomake clean
-gomake out
-LD_LIBRARY_PATH=. ./out
+./test.bash
 ) || exit $?
 
 (xcd ../doc/progs
@@ -102,8 +131,12 @@ do
 done
 
 [ "$GOARCH" == arm ] ||
-(xcd ../test/bench
+(xcd ../test/bench/shootout
 ./timing.sh -test
+) || exit $?
+
+(xcd ../test/bench/go1
+gomake test
 ) || exit $?
 
 (xcd ../test

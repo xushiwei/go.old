@@ -42,6 +42,7 @@
 char linuxdynld[] = "/lib/ld-linux.so.2";
 char freebsddynld[] = "/usr/libexec/ld-elf.so.1";
 char openbsddynld[] = "/usr/libexec/ld.so";
+char netbsddynld[] = "/usr/libexec/ld.elf_so";
 
 int32
 entryvalue(void)
@@ -91,6 +92,7 @@ enum {
 	ElfStrPlt,
 	ElfStrGnuVersion,
 	ElfStrGnuVersionR,
+	ElfStrNoteNetbsdIdent,
 	NElfStr
 };
 
@@ -527,6 +529,8 @@ doelf(void)
 	elfstr[ElfStrText] = addstring(shstrtab, ".text");
 	elfstr[ElfStrData] = addstring(shstrtab, ".data");
 	elfstr[ElfStrBss] = addstring(shstrtab, ".bss");
+	if(HEADTYPE == Hnetbsd)
+		elfstr[ElfStrNoteNetbsdIdent] = addstring(shstrtab, ".note.netbsd.ident");
 	addstring(shstrtab, ".elfdata");
 	addstring(shstrtab, ".rodata");
 	addstring(shstrtab, ".gosymtab");
@@ -660,7 +664,7 @@ asmb(void)
 {
 	int32 v, magic;
 	int a, dynsym;
-	uint32 symo, startva, dwarfoff, machlink;
+	uint32 symo, startva, dwarfoff, machlink, resoff;
 	ElfEhdr *eh;
 	ElfPhdr *ph, *pph;
 	ElfShdr *sh;
@@ -714,6 +718,8 @@ asmb(void)
 			if(elfverneed)
 				elftextsh += 2;
 		}
+		if(HEADTYPE == Hnetbsd)
+			elftextsh += 1;
 	}
 
 	symsize = 0;
@@ -760,7 +766,7 @@ asmb(void)
 		default:
 			if(iself) {
 				if(debug['v'])
-				       Bprint(&bso, "%5.2f elfsym\n", cputime());
+					Bprint(&bso, "%5.2f elfsym\n", cputime());
 				asmelfsym();
 				cflush();
 				cwrite(elfstrdat, elfstrsize);
@@ -931,6 +937,7 @@ asmb(void)
 	Elfput:
 		eh = getElfEhdr();
 		startva = INITTEXT - HEADR;
+		resoff = ELFRESERVE;
 
 		/* This null SHdr must appear before all others */
 		newElfShdr(elfstr[ElfStrEmpty]);
@@ -969,15 +976,31 @@ asmb(void)
 				case Hfreebsd:
 					interpreter = freebsddynld;
 					break;
+				case Hnetbsd:
+					interpreter = netbsddynld;
+					break;
 				case Hopenbsd:
 					interpreter = openbsddynld;
 					break;
 				}
 			}
-			elfinterp(sh, startva, interpreter);
+			resoff -= elfinterp(sh, startva, resoff, interpreter);
 
 			ph = newElfPhdr();
 			ph->type = PT_INTERP;
+			ph->flags = PF_R;
+			phsh(ph, sh);
+		}
+
+		if(HEADTYPE == Hnetbsd) {
+			sh = newElfShdr(elfstr[ElfStrNoteNetbsdIdent]);
+			sh->type = SHT_NOTE;
+			sh->flags = SHF_ALLOC;
+			sh->addralign = 4;
+			resoff -= elfnetbsdsig(sh, startva, resoff);
+
+			ph = newElfPhdr();
+			ph->type = PT_NOTE;
 			ph->flags = PF_R;
 			phsh(ph, sh);
 		}
@@ -986,7 +1009,7 @@ asmb(void)
 		elfphload(&segdata);
 
 		/* Dynamic linking sections */
-		if (!debug['d']) {	/* -d suppresses dynamic loader format */
+		if(!debug['d']) {	/* -d suppresses dynamic loader format */
 			/* S headers for dynamic linking */
 			sh = newElfShdr(elfstr[ElfStrGot]);
 			sh->type = SHT_PROGBITS;
@@ -1110,7 +1133,7 @@ asmb(void)
 		for(sect=segdata.sect; sect!=nil; sect=sect->next)
 			elfshbits(sect);
 
-		if (!debug['s']) {
+		if(!debug['s']) {
 			sh = newElfShdr(elfstr[ElfStrSymtab]);
 			sh->type = SHT_SYMTAB;
 			sh->off = symo;
@@ -1140,6 +1163,9 @@ asmb(void)
 		case Hfreebsd:
 			eh->ident[EI_OSABI] = ELFOSABI_FREEBSD;
 			break;
+		case Hnetbsd:
+			eh->ident[EI_OSABI] = ELFOSABI_NETBSD;
+			break;
 		case Hopenbsd:
 			eh->ident[EI_OSABI] = ELFOSABI_OPENBSD;
 			break;
@@ -1160,7 +1186,9 @@ asmb(void)
 		a += elfwritehdr();
 		a += elfwritephdrs();
 		a += elfwriteshdrs();
-		a += elfwriteinterp();
+		a += elfwriteinterp(elfstr[ElfStrInterp]);
+		if(HEADTYPE == Hnetbsd)
+			a += elfwritenetbsdsig(elfstr[ElfStrNoteNetbsdIdent]);
 		if(a > ELFRESERVE)	
 			diag("ELFRESERVE too small: %d > %d", a, ELFRESERVE);
 		break;

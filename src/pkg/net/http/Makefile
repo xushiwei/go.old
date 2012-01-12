@@ -12,6 +12,7 @@ GOFILES=\
 	filetransport.go\
 	fs.go\
 	header.go\
+	jar.go\
 	lex.go\
 	request.go\
 	response.go\
@@ -20,10 +21,5 @@ GOFILES=\
 	status.go\
 	transfer.go\
 	transport.go\
-
-GOFILES_windows=\
-	transport_windows.go\
-
-GOFILES+=$(GOFILES_$(GOOS))
 
 include ../../../Make.pkg

@@ -3,6 +3,10 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
+# Set to false if something breaks, to revert back to Makefiles.
+# TODO: This variable will go away when the Makefiles do.
+USE_GO_TOOL=${USE_GO_TOOL:-true}
+
 # If set to a Windows-style path convert to an MSYS-Unix 
 # one using the built-in shell commands.   
 if [[ "$GOROOT" == *:* ]]; then
@@ -96,7 +100,7 @@ set +o noclobber
 
 # Tried to use . <($MAKE ...) here, but it cannot set environment
 # variables in the version of bash that ships with OS X.  Amazing.
-eval $($MAKE --no-print-directory -f Make.inc go-env | egrep 'GOARCH|GOOS|GOHOSTARCH|GOHOSTOS|GO_ENV')
+eval $($MAKE --no-print-directory -f Make.inc go-env | egrep 'GOARCH|GOOS|GOHOSTARCH|GOHOSTOS|GO_ENV|CGO_ENABLED')
 
 # Shell doesn't tell us whether make succeeded,
 # so Make.inc generates a fake variable name.

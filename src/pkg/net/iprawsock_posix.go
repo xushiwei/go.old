@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin freebsd linux openbsd windows
+// +build darwin freebsd linux netbsd openbsd windows
 
 // (Raw) IP sockets
 
@@ -265,16 +265,6 @@ func ListenIP(netProto string, laddr *IPAddr) (c *IPConn, err error) {
 		return nil, e
 	}
 	return newIPConn(fd), nil
-}
-
-// BindToDevice binds an IPConn to a network interface.
-func (c *IPConn) BindToDevice(device string) error {
-	if !c.ok() {
-		return os.EINVAL
-	}
-	c.fd.incref()
-	defer c.fd.decref()
-	return os.NewSyscallError("setsockopt", syscall.BindToDevice(c.fd.sysfd, device))
 }
 
 // File returns a copy of the underlying os.File, set to blocking mode.

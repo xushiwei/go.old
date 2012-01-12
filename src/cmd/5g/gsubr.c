@@ -515,6 +515,12 @@ nodarg(Type *t, int fp)
 	n->orig = t->nname;
 
 fp:
+	// Rewrite argument named _ to __,
+	// or else the assignment to _ will be
+	// discarded during code generation.
+	if(isblank(n))
+		n->sym = lookup("__");
+
 	switch(fp) {
 	default:
 		fatal("nodarg %T %d", t, fp);
@@ -1320,6 +1326,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 			a->dval = mpgetflt(n->val.u.fval);
 			break;
 		case CTINT:
+		case CTRUNE:
 			a->sym = S;
 			a->type = D_CONST;
 			a->offset = mpgetfix(n->val.u.xval);
@@ -1777,7 +1784,7 @@ sudoaddable(int as, Node *n, Addr *a, int *w)
 
 	switch(n->op) {
 	case OLITERAL:
-		if(n->val.ctype != CTINT)
+		if(!isconst(n, CTINT))
 			break;
 		v = mpgetfix(n->val.u.xval);
 		if(v >= 32000 || v <= -32000)

@@ -71,6 +71,7 @@ do
 	fi
 done
 
+$USE_GO_TOOL ||
 (
 	cd "$GOROOT"/src/pkg;
 	bash deps.bash	# do this here so clean.bash will work in the pkg directory
@@ -78,11 +79,31 @@ done
 bash "$GOROOT"/src/clean.bash
 
 # pkg builds libcgo and the Go programs in cmd.
-for i in lib9 libbio libmach cmd pkg
+for i in lib9 libbio libmach cmd
 do
 	echo; echo; echo %%%% making $i %%%%; echo
 	gomake -C $i install
 done
+
+echo; echo; echo %%%% making runtime generated files %%%%; echo
+
+(
+	cd "$GOROOT"/src/pkg/runtime
+	./autogen.sh
+	gomake install; gomake clean # copy runtime.h to pkg directory
+) || exit 1
+
+if $USE_GO_TOOL; then
+	echo
+	echo '# Building go command from bootstrap script.'
+	./buildscript_${GOOS}_$GOARCH.sh
+
+	echo '# Building Go code.'
+	go install -a std
+else
+	echo; echo; echo %%%% making pkg %%%%; echo
+	gomake -C pkg install
+fi
 
 # Print post-install messages.
 # Implemented as a function so that all.bash can repeat the output

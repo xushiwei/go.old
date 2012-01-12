@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 )
@@ -24,7 +23,7 @@ type untarTest struct {
 var gnuTarTest = &untarTest{
 	file: "testdata/gnu.tar",
 	headers: []*Header{
-		&Header{
+		{
 			Name:     "small.txt",
 			Mode:     0640,
 			Uid:      73025,
@@ -35,7 +34,7 @@ var gnuTarTest = &untarTest{
 			Uname:    "dsymonds",
 			Gname:    "eng",
 		},
-		&Header{
+		{
 			Name:     "small2.txt",
 			Mode:     0640,
 			Uid:      73025,
@@ -55,10 +54,10 @@ var gnuTarTest = &untarTest{
 
 var untarTests = []*untarTest{
 	gnuTarTest,
-	&untarTest{
+	{
 		file: "testdata/star.tar",
 		headers: []*Header{
-			&Header{
+			{
 				Name:       "small.txt",
 				Mode:       0640,
 				Uid:        73025,
@@ -71,7 +70,7 @@ var untarTests = []*untarTest{
 				AccessTime: time.Unix(1244592783, 0),
 				ChangeTime: time.Unix(1244592783, 0),
 			},
-			&Header{
+			{
 				Name:       "small2.txt",
 				Mode:       0640,
 				Uid:        73025,
@@ -86,10 +85,10 @@ var untarTests = []*untarTest{
 			},
 		},
 	},
-	&untarTest{
+	{
 		file: "testdata/v7.tar",
 		headers: []*Header{
-			&Header{
+			{
 				Name:     "small.txt",
 				Mode:     0444,
 				Uid:      73025,
@@ -98,7 +97,7 @@ var untarTests = []*untarTest{
 				ModTime:  time.Unix(1244593104, 0),
 				Typeflag: '\x00',
 			},
-			&Header{
+			{
 				Name:     "small2.txt",
 				Mode:     0444,
 				Uid:      73025,
@@ -127,7 +126,7 @@ testLoop:
 				f.Close()
 				continue testLoop
 			}
-			if !reflect.DeepEqual(hdr, header) {
+			if *hdr != *header {
 				t.Errorf("test %d, entry %d: Incorrect header:\nhave %+v\nwant %+v",
 					i, j, *hdr, *header)
 			}
@@ -201,7 +200,7 @@ func TestIncrementalRead(t *testing.T) {
 		}
 
 		// check the header
-		if !reflect.DeepEqual(hdr, headers[nread]) {
+		if *hdr != *headers[nread] {
 			t.Errorf("Incorrect header:\nhave %+v\nwant %+v",
 				*hdr, headers[nread])
 		}

@@ -1,13 +1,15 @@
-application: godashboard
-version: go
+application: go-build
+version: 1
 runtime: go
 api_version: 3
 
 handlers:
+- url: /static
+  static_dir: static
 - url: /log/.+
   script: _go_app
-- url: /(commit|package|result|tag|todo)
+- url: /(|commit|packages|result|tag|todo)
   script: _go_app
-- url: /buildtest
+- url: /(init|buildtest|key|_ah/queue/go/delay)
   script: _go_app
   login: admin

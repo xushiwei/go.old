@@ -98,6 +98,7 @@ var _sin = [...]float64{
 	8.33333333332211858878E-3,  // 0x3f8111111110f7d0
 	-1.66666666666666307295E-1, // 0xbfc5555555555548
 }
+
 // cos coefficients
 var _cos = [...]float64{
 	-1.13585365213876817300E-11, // 0xbda8fa49a0861a9b
@@ -110,10 +111,12 @@ var _cos = [...]float64{
 
 // Cos returns the cosine of x.
 //
-// Special conditions are:
+// Special cases are:
 //	Cos(±Inf) = NaN
 //	Cos(NaN) = NaN
-func Cos(x float64) float64 {
+func Cos(x float64) float64
+
+func cos(x float64) float64 {
 	const (
 		PI4A = 7.85398125648498535156E-1                             // 0x3fe921fb40000000, Pi/4 split into three parts
 		PI4B = 3.77489470793079817668E-8                             // 0x3e64442d00000000,
@@ -166,11 +169,13 @@ func Cos(x float64) float64 {
 
 // Sin returns the sine of x.
 //
-// Special conditions are:
+// Special cases are:
 //	Sin(±0) = ±0
 //	Sin(±Inf) = NaN
 //	Sin(NaN) = NaN
-func Sin(x float64) float64 {
+func Sin(x float64) float64
+
+func sin(x float64) float64 {
 	const (
 		PI4A = 7.85398125648498535156E-1                             // 0x3fe921fb40000000, Pi/4 split into three parts
 		PI4B = 3.77489470793079817668E-8                             // 0x3e64442d00000000,

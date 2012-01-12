@@ -7,11 +7,9 @@
 #include	"go.h"
 #include	"y.tab.h"
 
-static	void	dumpsym(Sym*);
-static	void	dumpexporttype(Type*);
-static	void	dumpexportvar(Sym*);
-static	void	dumpexportconst(Sym*);
+static void	dumpexporttype(Type *t);
 
+// Mark n's symbol as exported
 void
 exportsym(Node *n)
 {
@@ -27,6 +25,7 @@ exportsym(Node *n)
 	exportlist = list(exportlist, n);
 }
 
+// Mark n's symbol as package-local
 static void
 packagesym(Node *n)
 {
@@ -79,7 +78,7 @@ dumppkg(Pkg *p)
 {
 	char *suffix;
 
-	if(p == nil || p == localpkg || p->exported)
+	if(p == nil || p == localpkg || p->exported || p == builtinpkg)
 		return;
 	p->exported = 1;
 	suffix = "";
@@ -87,6 +86,68 @@ dumppkg(Pkg *p)
 		suffix = " // indirect";
 	Bprint(bout, "\timport %s \"%Z\"%s\n", p->name, p->path, suffix);
 }
+
+// Look for anything we need for the inline body
+static void reexportdep(Node *n);
+static void
+reexportdeplist(NodeList *ll)
+{
+	for(; ll ;ll=ll->next)
+		reexportdep(ll->n);
+}
+
+static void
+reexportdep(Node *n)
+{
+	Type *t;
+
+	if(!n)
+		return;
+
+	switch(n->op) {
+	case ONAME:
+		switch(n->class&~PHEAP) {
+		case PFUNC:
+		case PEXTERN:
+			if (n->sym && n->sym->pkg != localpkg && n->sym->pkg != builtinpkg)
+				exportlist = list(exportlist, n);
+		}
+		break;
+
+	case OTYPE:
+	case OLITERAL:
+		if (n->sym && n->sym->pkg != localpkg && n->sym->pkg != builtinpkg)
+			exportlist = list(exportlist, n);
+		break;
+
+	// for operations that need a type when rendered, put the type on the export list.
+	case OCONV:
+	case OCONVIFACE:
+	case OCONVNOP:
+	case ODOTTYPE:
+	case OSTRUCTLIT:
+	case OPTRLIT:
+		t = n->type;
+		if(!t->sym && t->type)
+			t = t->type;
+		if (t && t->sym && t->sym->def && t->sym->pkg != localpkg  && t->sym->pkg != builtinpkg) {
+//			print("reexport convnop %+hN\n", t->sym->def);
+			exportlist = list(exportlist, t->sym->def);
+		}
+		break;
+	}
+
+	reexportdep(n->left);
+	reexportdep(n->right);
+	reexportdeplist(n->list);
+	reexportdeplist(n->rlist);
+	reexportdeplist(n->ninit);
+	reexportdep(n->ntest);
+	reexportdep(n->nincr);
+	reexportdeplist(n->nbody);
+	reexportdeplist(n->nelse);
+}
+
 
 static void
 dumpexportconst(Sym *s)
@@ -124,9 +185,13 @@ dumpexportvar(Sym *s)
 	t = n->type;
 	dumpexporttype(t);
 
-	if(t->etype == TFUNC && n->class == PFUNC)
-		Bprint(bout, "\tfunc %#S%#hT\n", s, t);
-	else
+	if(t->etype == TFUNC && n->class == PFUNC) {
+		if (n->inl) {
+			Bprint(bout, "\tfunc %#S%#hT { %#H }\n", s, t, n->inl);
+			reexportdeplist(n->inl);
+		} else
+			Bprint(bout, "\tfunc %#S%#hT\n", s, t);
+	} else
 		Bprint(bout, "\tvar %#S %#T\n", s, t);
 }
 
@@ -149,7 +214,6 @@ dumpexporttype(Type *t)
 
 	if(t == T)
 		return;
-
 	if(t->printed || t == types[t->etype] || t == bytetype || t == runetype || t == errortype)
 		return;
 	t->printed = 1;
@@ -178,7 +242,11 @@ dumpexporttype(Type *t)
 	Bprint(bout, "\ttype %#S %#lT\n", t->sym, t);
 	for(i=0; i<n; i++) {
 		f = m[i];
-		Bprint(bout, "\tfunc (%#T) %#hS%#hT\n", getthisx(f->type)->type, f->sym, f->type);
+		if (f->type->nname && f->type->nname->inl) { // nname was set by caninl
+			Bprint(bout, "\tfunc (%#T) %#hhS%#hT { %#H }\n", getthisx(f->type)->type, f->sym, f->type, f->type->nname->inl);
+			reexportdeplist(f->type->nname->inl);
+		} else
+			Bprint(bout, "\tfunc (%#T) %#hhS%#hT\n", getthisx(f->type)->type, f->sym, f->type);
 	}
 }
 
@@ -200,15 +268,18 @@ dumpsym(Sym *s)
 	default:
 		yyerror("unexpected export symbol: %O %S", s->def->op, s);
 		break;
+
 	case OLITERAL:
 		dumpexportconst(s);
 		break;
+
 	case OTYPE:
 		if(s->def->type->etype == TFORW)
 			yyerror("export of incomplete type %S", s);
 		else
 			dumpexporttype(s->def->type);
 		break;
+
 	case ONAME:
 		dumpexportvar(s);
 		break;
@@ -286,12 +357,25 @@ pkgtype(Sym *s)
 	return s->def->type;
 }
 
-static int
-mypackage(Sym *s)
+void
+importimport(Sym *s, Strlit *z)
 {
-	// we import all definitions for runtime.
-	// lowercase ones can only be used by the compiler.
-	return s->pkg == localpkg || s->pkg == runtimepkg;
+	// Informational: record package name
+	// associated with import path, for use in
+	// human-readable messages.
+	Pkg *p;
+
+	p = mkpkg(z);
+	if(p->name == nil) {
+		p->name = s->name;
+		pkglookup(s->name, nil)->npkg++;
+	} else if(strcmp(p->name, s->name) != 0)
+		yyerror("conflicting names %s and %s for package \"%Z\"", p->name, s->name, p->path);
+	
+	if(!incannedimport && myimportpath != nil && strcmp(z->s, myimportpath) == 0) {
+		yyerror("import \"%Z\": package depends on \"%Z\" (import cycle)", importpkg->path, z);
+		errorexit();
+	}
 }
 
 void
@@ -299,19 +383,17 @@ importconst(Sym *s, Type *t, Node *n)
 {
 	Node *n1;
 
-	if(!exportname(s->name) && !mypackage(s))
-		return;
 	importsym(s, OLITERAL);
 	convlit(&n, t);
-	if(s->def != N) {
-		// TODO: check if already the same.
+
+	if(s->def != N)	 // TODO: check if already the same.
 		return;
-	}
 
 	if(n->op != OLITERAL) {
 		yyerror("expression must be a constant");
 		return;
 	}
+
 	if(n->sym != S) {
 		n1 = nod(OXXX, N, N);
 		*n1 = *n;
@@ -325,12 +407,9 @@ importconst(Sym *s, Type *t, Node *n)
 }
 
 void
-importvar(Sym *s, Type *t, int ctxt)
+importvar(Sym *s, Type *t)
 {
 	Node *n;
-
-	if(!exportname(s->name) && !initname(s->name) && !mypackage(s))
-		return;
 
 	importsym(s, ONAME);
 	if(s->def != N && s->def->op == ONAME) {
@@ -340,7 +419,7 @@ importvar(Sym *s, Type *t, int ctxt)
 	}
 	n = newname(s);
 	n->type = t;
-	declare(n, ctxt);
+	declare(n, PEXTERN);
 
 	if(debug['E'])
 		print("import var %S %lT\n", s, t);
@@ -351,38 +430,25 @@ importtype(Type *pt, Type *t)
 {
 	Node *n;
 
-	if(pt != T && t != T) {
-		// override declaration in unsafe.go for Pointer.
-		// there is no way in Go code to define unsafe.Pointer
-		// so we have to supply it.
-		if(incannedimport &&
-		   strcmp(importpkg->name, "unsafe") == 0 &&
-		   strcmp(pt->nod->sym->name, "Pointer") == 0) {
-			t = types[TUNSAFEPTR];
-		}
-
-		if(pt->etype == TFORW) {
-			n = pt->nod;
-			copytype(pt->nod, t);
-			// unzero nod
-			pt->nod = n;
-			
-			pt->sym->lastlineno = parserline();
-			declare(n, PEXTERN);
-			
-			checkwidth(pt);
-		} else if(!eqtype(pt->orig, t))
-			yyerror("inconsistent definition for type %S during import\n\t%lT\n\t%lT", pt->sym, pt->orig, t);
+	// override declaration in unsafe.go for Pointer.
+	// there is no way in Go code to define unsafe.Pointer
+	// so we have to supply it.
+	if(incannedimport &&
+	   strcmp(importpkg->name, "unsafe") == 0 &&
+	   strcmp(pt->nod->sym->name, "Pointer") == 0) {
+		t = types[TUNSAFEPTR];
 	}
+
+	if(pt->etype == TFORW) {
+		n = pt->nod;
+		copytype(pt->nod, t);
+		pt->nod = n;		// unzero nod
+		pt->sym->lastlineno = parserline();
+		declare(n, PEXTERN);
+		checkwidth(pt);
+	} else if(!eqtype(pt->orig, t))
+		yyerror("inconsistent definition for type %S during import\n\t%lT\n\t%lT", pt->sym, pt->orig, t);
 
 	if(debug['E'])
 		print("import type %T %lT\n", pt, t);
 }
-
-void
-importmethod(Sym *s, Type *t)
-{
-	checkwidth(t);
-	addmethod(s, t, 0);
-}
-

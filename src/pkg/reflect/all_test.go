@@ -64,7 +64,7 @@ var typeTests = []pair{
 	{struct{ x (**integer) }{}, "**reflect_test.integer"},
 	{struct{ x ([32]int32) }{}, "[32]int32"},
 	{struct{ x ([]int8) }{}, "[]int8"},
-	{struct{ x (map[string]int32) }{}, "map[string] int32"},
+	{struct{ x (map[string]int32) }{}, "map[string]int32"},
 	{struct{ x (chan<- string) }{}, "chan<- string"},
 	{struct {
 		x struct {
@@ -180,7 +180,7 @@ var valueTests = []pair{
 	{new(**int8), "**int8(0)"},
 	{new([5]int32), "[5]int32{0, 0, 0, 0, 0}"},
 	{new(**integer), "**reflect_test.integer(0)"},
-	{new(map[string]int32), "map[string] int32{<can't iterate on maps>}"},
+	{new(map[string]int32), "map[string]int32{<can't iterate on maps>}"},
 	{new(chan<- string), "chan<- string"},
 	{new(func(a int8, b int32)), "func(int8, int32)(0)"},
 	{new(struct {
@@ -419,7 +419,7 @@ func TestAll(t *testing.T) {
 	testType(t, 8, typ.Elem(), "int32")
 
 	typ = TypeOf((map[string]*int32)(nil))
-	testType(t, 9, typ, "map[string] *int32")
+	testType(t, 9, typ, "map[string]*int32")
 	mtyp := typ
 	testType(t, 10, mtyp.Key(), "string")
 	testType(t, 11, mtyp.Elem(), "*int32")
@@ -468,8 +468,8 @@ func TestInterfaceValue(t *testing.T) {
 func TestFunctionValue(t *testing.T) {
 	var x interface{} = func() {}
 	v := ValueOf(x)
-	if v.Interface() != v.Interface() || v.Interface() != x {
-		t.Fatalf("TestFunction != itself")
+	if fmt.Sprint(v.Interface()) != fmt.Sprint(x) {
+		t.Fatalf("TestFunction returned wrong pointer")
 	}
 	assert(t, v.Type().String(), "func()")
 }
@@ -1557,14 +1557,26 @@ func TestSmallNegativeInt(t *testing.T) {
 func TestSlice(t *testing.T) {
 	xs := []int{1, 2, 3, 4, 5, 6, 7, 8}
 	v := ValueOf(xs).Slice(3, 5).Interface().([]int)
-	if len(v) != 2 || v[0] != 4 || v[1] != 5 {
-		t.Errorf("xs.Slice(3, 5) = %v", v)
+	if len(v) != 2 {
+		t.Errorf("len(xs.Slice(3, 5)) = %d", len(v))
+	}
+	if cap(v) != 5 {
+		t.Errorf("cap(xs.Slice(3, 5)) = %d", cap(v))
+	}
+	if !DeepEqual(v[0:5], xs[3:]) {
+		t.Errorf("xs.Slice(3, 5)[0:5] = %v", v[0:5])
 	}
 
-	xa := [7]int{10, 20, 30, 40, 50, 60, 70}
+	xa := [8]int{10, 20, 30, 40, 50, 60, 70, 80}
 	v = ValueOf(&xa).Elem().Slice(2, 5).Interface().([]int)
-	if len(v) != 3 || v[0] != 30 || v[1] != 40 || v[2] != 50 {
-		t.Errorf("xa.Slice(2, 5) = %v", v)
+	if len(v) != 3 {
+		t.Errorf("len(xa.Slice(2, 5)) = %d", len(v))
+	}
+	if cap(v) != 6 {
+		t.Errorf("cap(xa.Slice(2, 5)) = %d", cap(v))
+	}
+	if !DeepEqual(v[0:6], xa[2:]) {
+		t.Errorf("xs.Slice(2, 5)[0:6] = %v", v[0:6])
 	}
 }
 

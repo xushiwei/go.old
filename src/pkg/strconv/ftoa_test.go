@@ -128,47 +128,92 @@ var ftoatests = []ftoaTest{
 func TestFtoa(t *testing.T) {
 	for i := 0; i < len(ftoatests); i++ {
 		test := &ftoatests[i]
-		s := Ftoa64(test.f, test.fmt, test.prec)
-		if s != test.s {
-			t.Error("test", test.f, string(test.fmt), test.prec, "want", test.s, "got", s)
-		}
-		s = FtoaN(test.f, test.fmt, test.prec, 64)
+		s := FormatFloat(test.f, test.fmt, test.prec, 64)
 		if s != test.s {
 			t.Error("testN=64", test.f, string(test.fmt), test.prec, "want", test.s, "got", s)
 		}
+		x := AppendFloat([]byte("abc"), test.f, test.fmt, test.prec, 64)
+		if string(x) != "abc"+test.s {
+			t.Error("AppendFloat testN=64", test.f, string(test.fmt), test.prec, "want", "abc"+test.s, "got", string(x))
+		}
 		if float64(float32(test.f)) == test.f && test.fmt != 'b' {
-			s := Ftoa32(float32(test.f), test.fmt, test.prec)
-			if s != test.s {
-				t.Error("test32", test.f, string(test.fmt), test.prec, "want", test.s, "got", s)
-			}
-			s = FtoaN(test.f, test.fmt, test.prec, 32)
+			s := FormatFloat(test.f, test.fmt, test.prec, 32)
 			if s != test.s {
 				t.Error("testN=32", test.f, string(test.fmt), test.prec, "want", test.s, "got", s)
+			}
+			x := AppendFloat([]byte("abc"), test.f, test.fmt, test.prec, 32)
+			if string(x) != "abc"+test.s {
+				t.Error("AppendFloat testN=32", test.f, string(test.fmt), test.prec, "want", "abc"+test.s, "got", string(x))
 			}
 		}
 	}
 }
 
-func BenchmarkFtoa64Decimal(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		Ftoa64(33909, 'g', -1)
+func TestAppendFloatDoesntAllocate(t *testing.T) {
+	n := numAllocations(func() {
+		var buf [64]byte
+		AppendFloat(buf[:0], 1.23, 'g', 5, 64)
+	})
+	want := 1 // TODO(bradfitz): this might be 0, once escape analysis is better
+	if n != want {
+		t.Errorf("with local buffer, did %d allocations, want %d", n, want)
+	}
+	n = numAllocations(func() {
+		AppendFloat(globalBuf[:0], 1.23, 'g', 5, 64)
+	})
+	if n != 0 {
+		t.Errorf("with reused buffer, did %d allocations, want 0", n)
 	}
 }
 
-func BenchmarkFtoa64Float(b *testing.B) {
+func BenchmarkFormatFloatDecimal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		Ftoa64(339.7784, 'g', -1)
+		FormatFloat(33909, 'g', -1, 64)
 	}
 }
 
-func BenchmarkFtoa64FloatExp(b *testing.B) {
+func BenchmarkFormatFloat(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		Ftoa64(-5.09e75, 'g', -1)
+		FormatFloat(339.7784, 'g', -1, 64)
 	}
 }
 
-func BenchmarkFtoa64Big(b *testing.B) {
+func BenchmarkFormatFloatExp(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		Ftoa64(123456789123456789123456789, 'g', -1)
+		FormatFloat(-5.09e75, 'g', -1, 64)
+	}
+}
+
+func BenchmarkFormatFloatBig(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		FormatFloat(123456789123456789123456789, 'g', -1, 64)
+	}
+}
+
+func BenchmarkAppendFloatDecimal(b *testing.B) {
+	dst := make([]byte, 0, 30)
+	for i := 0; i < b.N; i++ {
+		AppendFloat(dst, 33909, 'g', -1, 64)
+	}
+}
+
+func BenchmarkAppendFloat(b *testing.B) {
+	dst := make([]byte, 0, 30)
+	for i := 0; i < b.N; i++ {
+		AppendFloat(dst, 339.7784, 'g', -1, 64)
+	}
+}
+
+func BenchmarkAppendFloatExp(b *testing.B) {
+	dst := make([]byte, 0, 30)
+	for i := 0; i < b.N; i++ {
+		AppendFloat(dst, -5.09e75, 'g', -1, 64)
+	}
+}
+
+func BenchmarkAppendFloatBig(b *testing.B) {
+	dst := make([]byte, 0, 30)
+	for i := 0; i < b.N; i++ {
+		AppendFloat(dst, 123456789123456789123456789, 'g', -1, 64)
 	}
 }

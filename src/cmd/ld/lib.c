@@ -115,7 +115,7 @@ addlib(char *src, char *obj)
 		sprint(name, "");
 		i = 1;
 	} else
-	if(isalpha(histfrog[0]->name[1]) && histfrog[0]->name[2] == ':') {
+	if(isalpha((uchar)histfrog[0]->name[1]) && histfrog[0]->name[2] == ':') {
 		strcpy(name, histfrog[0]->name+1);
 		i = 1;
 	} else
@@ -274,6 +274,7 @@ loadlib(void)
 	for(i=0; i<libraryp; i++) {
 		if(debug['v'])
 			Bprint(&bso, "%5.2f autolib: %s (from %s)\n", cputime(), library[i].file, library[i].objref);
+		iscgo |= strcmp(library[i].pkg, "runtime/cgo") == 0;
 		objfile(library[i].file, library[i].pkg);
 	}
 	
@@ -350,6 +351,7 @@ objfile(char *file, char *pkg)
 		Bseek(f, 0L, 0);
 		ldobj(f, pkg, l, file, FileObj);
 		Bterm(f);
+		free(pkg);
 		return;
 	}
 	
@@ -411,6 +413,7 @@ objfile(char *file, char *pkg)
 
 out:
 	Bterm(f);
+	free(pkg);
 }
 
 void
@@ -438,14 +441,17 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 	magic = c1<<24 | c2<<16 | c3<<8 | c4;
 	if(magic == 0x7f454c46) {	// \x7F E L F
 		ldelf(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 	if((magic&~1) == 0xfeedface || (magic&~0x01000000) == 0xcefaedfe) {
 		ldmacho(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 	if(c1 == 0x4c && c2 == 0x01 || c1 == 0x64 && c2 == 0x86) {
 		ldpe(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 
@@ -471,16 +477,18 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 			return;
 		}
 		diag("%s: not an object file", pn);
+		free(pn);
 		return;
 	}
 	
 	// First, check that the basic goos, string, and version match.
-	t = smprint("%s %s %s ", getgoos(), thestring, getgoversion());
+	t = smprint("%s %s %s ", goos, thestring, getgoversion());
 	line[n] = ' ';
 	if(strncmp(line+10, t, strlen(t)) != 0 && !debug['f']) {
 		line[n] = '\0';
 		diag("%s: object is [%s] expected [%s]", pn, line+10, t);
 		free(t);
+		free(pn);
 		return;
 	}
 	
@@ -495,6 +503,7 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 			line[n] = '\0';
 			diag("%s: object is [%s] expected [%s]", pn, line+10, theline);
 			free(t);
+			free(pn);
 			return;
 		}
 	}
@@ -520,10 +529,12 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 	Bseek(f, import1, 0);
 
 	ldobj1(f, pkg, eof - Boffset(f), pn);
+	free(pn);
 	return;
 
 eof:
 	diag("truncated object file: %s", pn);
+	free(pn);
 }
 
 static Sym*

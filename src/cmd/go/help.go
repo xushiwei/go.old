@@ -27,6 +27,9 @@ The special import path "all" expands to all package directories
 found in all the GOPATH trees.  For example, 'go list all' 
 lists all the packages on the local system.
 
+The special import path "std" is like all but expands to just the
+packages in the standard Go library.
+
 An import path can also name a package to be downloaded from
 a remote repository.  Run 'go help remote' for details.
 
@@ -35,7 +38,7 @@ By convention, this is arranged by starting each path with a
 unique prefix that belongs to you.  For example, paths used
 internally at Google all begin with 'google', and paths
 denoting remote repositories begin with the path to the code,
-such as 'project.googlecode.com/'.
+such as 'code.google.com/p/project'.
 	`,
 }
 
@@ -63,14 +66,11 @@ A few common code hosting sites have special syntax:
 
 	Google Code Project Hosting (Git, Mercurial, Subversion)
 
-		import "project.googlecode.com/git"
-		import "project.googlecode.com/git/sub/directory"
+		import "code.google.com/p/project"
+		import "code.google.com/p/project/sub/directory"
 
-		import "project.googlecode.com/hg"
-		import "project.googlecode.com/hg/sub/directory"
-
-		import "project.googlecode.com/svn/trunk"
-		import "project.googlecode.com/svn/trunk/sub/directory"
+		import "code.google.com/p/project.subrepository"
+		import "code.google.com/p/project.subrepository/sub/directory"
 
 	Launchpad (Bazaar)
 
@@ -166,10 +166,10 @@ Here's an example directory layout:
                     y.go
         bin/
             quux                   (installed command)
-		pkg/
-		    linux_amd64/
-		        foo/
-		            bar.a          (installed package object)
+        pkg/
+            linux_amd64/
+                foo/
+                    bar.a          (installed package object)
 
 Go searches each directory listed in GOPATH to find source code,
 but new packages are always downloaded into the first directory 

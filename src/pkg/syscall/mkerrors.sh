@@ -15,35 +15,6 @@ GCC=gcc
 
 uname=$(uname)
 
-includes_Linux='
-#define _LARGEFILE_SOURCE
-#define _LARGEFILE64_SOURCE
-#define _FILE_OFFSET_BITS 64
-#define _GNU_SOURCE
-
-#include <bits/sockaddr.h>
-#include <sys/epoll.h>
-#include <sys/inotify.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <sys/mount.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <linux/if_addr.h>
-#include <linux/if_ether.h>
-#include <linux/if_tun.h>
-#include <linux/filter.h>
-#include <linux/netlink.h>
-#include <linux/reboot.h>
-#include <linux/rtnetlink.h>
-#include <linux/ptrace.h>
-#include <linux/wait.h>
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/route.h>
-#include <netpacket/packet.h>
-'
-
 includes_Darwin='
 #define _DARWIN_C_SOURCE
 #define KERNEL
@@ -84,6 +55,56 @@ includes_FreeBSD='
 #include <netinet/ip_mroute.h>
 '
 
+includes_Linux='
+#define _LARGEFILE_SOURCE
+#define _LARGEFILE64_SOURCE
+#define _FILE_OFFSET_BITS 64
+#define _GNU_SOURCE
+
+#include <bits/sockaddr.h>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <linux/if_addr.h>
+#include <linux/if_ether.h>
+#include <linux/if_tun.h>
+#include <linux/filter.h>
+#include <linux/netlink.h>
+#include <linux/reboot.h>
+#include <linux/rtnetlink.h>
+#include <linux/ptrace.h>
+#include <linux/wait.h>
+#include <net/if.h>
+#include <net/if_arp.h>
+#include <net/route.h>
+#include <netpacket/packet.h>
+'
+
+includes_NetBSD='
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/event.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <sys/sysctl.h>
+#include <sys/termios.h>
+#include <sys/ttycom.h>
+#include <sys/wait.h>
+#include <net/bpf.h>
+#include <net/if.h>
+#include <net/if_types.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
+#include <netinet/ip_mroute.h>
+#include <netinet/if_ether.h>
+'
+
 includes_OpenBSD='
 #include <sys/types.h>
 #include <sys/param.h>
@@ -108,6 +129,7 @@ includes_OpenBSD='
 
 includes='
 #include <sys/types.h>
+#include <sys/file.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/socket.h>
@@ -153,6 +175,7 @@ ccflags="$@"
 		$2 ~ /^E[A-Z0-9_]+$/ ||
 		$2 ~ /^SIG[^_]/ ||
 		$2 ~ /^IN_/ ||
+		$2 ~ /^LOCK_(SH|EX|NB|UN)$/ ||
 		$2 ~ /^(AF|SOCK|SO|SOL|IPPROTO|IP|IPV6|TCP|EVFILT|EV|SHUT|PROT|MAP|PACKET|MSG|SCM|MCL|DT|MADV)_/ ||
 		$2 == "SOMAXCONN" ||
 		$2 == "NAME_MAX" ||

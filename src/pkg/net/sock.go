@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin freebsd linux openbsd windows
+// +build darwin freebsd linux netbsd openbsd windows
 
 // Sockets
 
@@ -109,11 +109,6 @@ func setReuseAddr(fd *netFD, reuse bool) error {
 	fd.incref()
 	defer fd.decref()
 	return setsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, boolint(reuse))
-}
-
-func bindToDevice(fd *netFD, dev string) error {
-	// TODO(rsc): call setsockopt with null-terminated string pointer
-	return os.EINVAL
 }
 
 func setDontRoute(fd *netFD, dontroute bool) error {
