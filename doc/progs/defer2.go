@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains the code snippets included in "Defer, Panic, an Recover."
+// This file contains the code snippets included in "Defer, Panic, and Recover."
 
 package main
 
@@ -35,6 +35,7 @@ func g(i int) {
 	fmt.Println("Printing in g", i)
 	g(i + 1)
 }
+
 // STOP OMIT
 
 // Revised version.
@@ -53,4 +54,5 @@ func CopyFile(dstName, srcName string) (written int64, err error) {
 
 	return io.Copy(dst, src)
 }
+
 // STOP OMIT

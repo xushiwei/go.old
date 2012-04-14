@@ -33,14 +33,6 @@ runtime·dumpregs(Regs64 *r)
 	runtime·printf("gs      %X\n", r->gs);
 }
 
-String
-runtime·signame(int32 sig)
-{
-	if(sig < 0 || sig >= NSIG)
-		return runtime·emptystring;
-	return runtime·gostringnocopy((byte*)runtime·sigtab[sig].name);
-}
-
 void
 runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 {
@@ -49,17 +41,22 @@ runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 	Regs64 *r;
 	uintptr *sp;
 	byte *pc;
+	SigTab *t;
 
 	uc = context;
 	mc = uc->uc_mcontext;
 	r = &mc->ss;
 
 	if(sig == SIGPROF) {
-		runtime·sigprof((uint8*)r->rip, (uint8*)r->rsp, nil, gp);
+		if(gp != m->g0 && gp != m->gsignal)
+			runtime·sigprof((uint8*)r->rip, (uint8*)r->rsp, nil, gp);
 		return;
 	}
 
-	if(gp != nil && (runtime·sigtab[sig].flags & SigPanic)) {
+	t = &runtime·sigtab[sig];
+	if(info->si_code != SI_USER && (t->flags & SigPanic)) {
+		if(gp == nil)
+			goto Throw;
 		// Work around Leopard bug that doesn't set FPE_INTDIV.
 		// Look at instruction to see if it is a divide.
 		// Not necessary in Snow Leopard (si_code will be != 0).
@@ -72,7 +69,7 @@ runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 			if(pc[0] == 0xF6 || pc[0] == 0xF7)
 				info->si_code = FPE_INTDIV;
 		}
-		
+
 		// Make it look like a call to the signal func.
 		// Have to pass arguments out of band since
 		// augmenting the stack frame would break
@@ -81,7 +78,7 @@ runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 		gp->sigcode0 = info->si_code;
 		gp->sigcode1 = (uintptr)info->si_addr;
 		gp->sigpc = r->rip;
-		
+
 		// Only push runtime·sigpanic if r->rip != 0.
 		// If r->rip == 0, probably panicked because of a
 		// call to a nil func.  Not pushing that onto sp will
@@ -97,15 +94,16 @@ runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 		return;
 	}
 
-	if(runtime·sigtab[sig].flags & SigQueue) {
-		if(runtime·sigsend(sig) || (runtime·sigtab[sig].flags & SigIgnore))
+	if(info->si_code == SI_USER || (t->flags & SigNotify))
+		if(runtime·sigsend(sig))
 			return;
-		runtime·exit(2);	// SIGINT, SIGTERM, etc
-	}
-
-	if(runtime·panicking)	// traceback already printed
+	if(t->flags & SigKill)
 		runtime·exit(2);
-	runtime·panicking = 1;
+	if(!(t->flags & SigThrow))
+		return;
+
+Throw:
+	runtime·startpanic();
 
 	if(sig < 0 || sig >= NSIG){
 		runtime·printf("Signal %d\n", sig);
@@ -126,11 +124,6 @@ runtime·sighandler(int32 sig, Siginfo *info, void *context, G *gp)
 }
 
 void
-runtime·sigignore(int32, Siginfo*, void*)
-{
-}
-
-void
 runtime·signalstack(byte *p, int32 n)
 {
 	StackT st;
@@ -141,8 +134,8 @@ runtime·signalstack(byte *p, int32 n)
 	runtime·sigaltstack(&st, nil);
 }
 
-static void
-sigaction(int32 i, void (*fn)(int32, Siginfo*, void*, G*), bool restart)
+void
+runtime·setsig(int32 i, void (*fn)(int32, Siginfo*, void*, G*), bool restart)
 {
 	Sigaction sa;
 
@@ -154,51 +147,4 @@ sigaction(int32 i, void (*fn)(int32, Siginfo*, void*, G*), bool restart)
 	sa.sa_tramp = runtime·sigtramp;	// runtime·sigtramp's job is to call into real handler
 	*(uintptr*)sa.__sigaction_u = (uintptr)fn;
 	runtime·sigaction(i, &sa, nil);
-}
-
-void
-runtime·initsig(int32 queue)
-{
-	int32 i;
-	void *fn;
-
-	runtime·siginit();
-
-	for(i = 0; i<NSIG; i++) {
-		if(runtime·sigtab[i].flags) {
-			if((runtime·sigtab[i].flags & SigQueue) != queue)
-				continue;
-			if(runtime·sigtab[i].flags & (SigCatch | SigQueue))
-				fn = runtime·sighandler;
-			else
-				fn = runtime·sigignore;
-			sigaction(i, fn, (runtime·sigtab[i].flags & SigRestart) != 0);
-		}
-	}
-}
-
-void
-runtime·resetcpuprofiler(int32 hz)
-{
-	Itimerval it;
-	
-	runtime·memclr((byte*)&it, sizeof it);
-	if(hz == 0) {
-		runtime·setitimer(ITIMER_PROF, &it, nil);
-		sigaction(SIGPROF, SIG_IGN, true);
-	} else {
-		sigaction(SIGPROF, runtime·sighandler, true);
-		it.it_interval.tv_sec = 0;
-		it.it_interval.tv_usec = 1000000 / hz;
-		it.it_value = it.it_interval;
-		runtime·setitimer(ITIMER_PROF, &it, nil);
-	}
-	m->profilehz = hz;
-}
-
-void
-os·sigpipe(void)
-{
-	sigaction(SIGPIPE, SIG_DFL, false);
-	runtime·raisesigpipe();
 }

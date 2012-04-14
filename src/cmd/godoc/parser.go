@@ -14,10 +14,10 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
+	pathpkg "path"
 )
 
-func parseFile(fset *token.FileSet, filename string, mode uint) (*ast.File, error) {
+func parseFile(fset *token.FileSet, filename string, mode parser.Mode) (*ast.File, error) {
 	src, err := ReadFile(fs, filename)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func parseFiles(fset *token.FileSet, filenames []string) (pkgs map[string]*ast.P
 		pkg, found := pkgs[name]
 		if !found {
 			// TODO(gri) Use NewPackage here; reconsider ParseFiles API.
-			pkg = &ast.Package{name, nil, nil, make(map[string]*ast.File)}
+			pkg = &ast.Package{Name: name, Files: make(map[string]*ast.File)}
 			pkgs[name] = pkg
 		}
 		pkg.Files[filename] = file
@@ -58,7 +58,7 @@ func parseDir(fset *token.FileSet, path string, filter func(os.FileInfo) bool) (
 	i := 0
 	for _, d := range list {
 		if filter == nil || filter(d) {
-			filenames[i] = filepath.Join(path, d.Name())
+			filenames[i] = pathpkg.Join(path, d.Name())
 			i++
 		}
 	}

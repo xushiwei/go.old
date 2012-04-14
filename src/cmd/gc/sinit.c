@@ -65,7 +65,7 @@ init1(Node *n, NodeList **out)
 		if(nerrors > 0)
 			errorexit();
 
-		print("initialization loop:\n");
+		print("%L: initialization loop:\n", n->lineno);
 		for(l=initlist;; l=l->next) {
 			if(l->next == nil)
 				break;
@@ -106,7 +106,7 @@ init1(Node *n, NodeList **out)
 			break;
 		*/
 			if(1) {
-				init1(n->defn->right, out);
+				init2(n->defn->right, out);
 				if(debug['j'])
 					print("%S\n", n->sym);
 				if(!staticinit(n, out)) {
@@ -154,6 +154,10 @@ init2(Node *n, NodeList **out)
 {
 	if(n == N || n->initorder == InitDone)
 		return;
+
+	if(n->op == ONAME && n->ninit)
+		fatal("name %S with ninit: %+N\n", n->sym, n);
+
 	init1(n, out);
 	init2(n->left, out);
 	init2(n->right, out);

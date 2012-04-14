@@ -10,15 +10,15 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"http"
-	"http/httptest"
 	"io"
-	"json"
-	"os"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"time"
-	"url"
 )
 
 func init() {
@@ -34,21 +34,21 @@ var testEntityKinds = []string{
 
 const testPkg = "code.google.com/p/go.test"
 
-var testPackage = &Package{Name: "Test", Path: testPkg}
+var testPackage = &Package{Name: "Test", Kind: "subrepo", Path: testPkg}
 
 var testPackages = []*Package{
-	&Package{Name: "Go", Path: ""},
+	{Name: "Go", Path: ""},
 	testPackage,
 }
 
-var tCommitTime = time.Seconds() - 60*60*24*7
+var tCommitTime = time.Now().Add(-time.Hour * 24 * 7)
 
 func tCommit(hash, parentHash string) *Commit {
-	tCommitTime += 60 * 60 * 12 // each commit should have a different time
+	tCommitTime.Add(time.Hour) // each commit should have a different time
 	return &Commit{
 		Hash:       hash,
 		ParentHash: parentHash,
-		Time:       datastore.Time(tCommitTime * 1e6),
+		Time:       tCommitTime,
 		User:       "adg",
 		Desc:       "change description",
 	}
@@ -61,7 +61,7 @@ var testRequests = []struct {
 	res  interface{}
 }{
 	// Packages
-	{"/packages", nil, nil, []*Package{testPackage}},
+	{"/packages?kind=subrepo", nil, nil, []*Package{testPackage}},
 
 	// Go repo
 	{"/commit", nil, tCommit("0001", "0000"), nil},
@@ -109,7 +109,11 @@ var testRequests = []struct {
 	{"/result", nil, &Result{PackagePath: testPkg, Builder: "linux-386", Hash: "1001", GoHash: "0001", OK: true}, nil},
 	{"/todo", url.Values{"kind": {"build-package"}, "builder": {"linux-386"}, "packagePath": {testPkg}, "goHash": {"0001"}}, nil, nil},
 	{"/todo", url.Values{"kind": {"build-package"}, "builder": {"linux-386"}, "packagePath": {testPkg}, "goHash": {"0002"}}, nil, &Todo{Kind: "build-package", Data: &Commit{Hash: "1003"}}},
+
+	// re-build Go revision for stale subrepos
+	{"/todo", url.Values{"kind": {"build-go-commit"}, "builder": {"linux-386"}}, nil, &Todo{Kind: "build-go-commit", Data: &Commit{Hash: "0005"}}},
 	{"/result", nil, &Result{PackagePath: testPkg, Builder: "linux-386", Hash: "1001", GoHash: "0005", OK: false, Log: "boo"}, nil},
+	{"/todo", url.Values{"kind": {"build-go-commit"}, "builder": {"linux-386"}}, nil, nil},
 }
 
 func testHandler(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +150,7 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 			body = new(bytes.Buffer)
 			json.NewEncoder(body).Encode(t.req)
 		}
-		url := "http://" + appengine.DefaultVersionHostname(c) + t.path
+		url := "http://" + domain + t.path
 		if t.vals != nil {
 			url += "?" + t.vals.Encode()
 		}
@@ -215,8 +219,8 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 				errorf("Response.Data not *Commit: %T", g.Data)
 				return
 			}
-			if e.Data.(*Commit).Hash != gd.Hash {
-				errorf("hashes don't match: got %q, want %q", g, e)
+			if eh := e.Data.(*Commit).Hash; eh != gd.Hash {
+				errorf("hashes don't match: got %q, want %q", gd.Hash, eh)
 				return
 			}
 		}
@@ -229,9 +233,9 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "PASS")
 }
 
-func nukeEntities(c appengine.Context, kinds []string) os.Error {
+func nukeEntities(c appengine.Context, kinds []string) error {
 	if !appengine.IsDevAppServer() {
-		return os.NewError("can't nuke production data")
+		return errors.New("can't nuke production data")
 	}
 	var keys []*datastore.Key
 	for _, kind := range kinds {

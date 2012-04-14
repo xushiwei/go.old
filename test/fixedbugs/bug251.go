@@ -1,4 +1,4 @@
-// errchk $G $D/$F.go
+// errorcheck
 
 // Copyright 2010 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -12,7 +12,7 @@ type I1 interface {
 }
 
 type I2 interface {
-	I1 // GC_ERROR "loop|interface"
+	I1 // ERROR "loop|interface"
 }
 
 

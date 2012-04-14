@@ -155,7 +155,7 @@ Prefix               Map key
 	<br/><br/>
 	For more information about the <code>append</code> function and slices
 	in general see the
-	<a href="http://blog.golang.org/2011/01/go-slices-usage-and-internals.html">Slices: usage and internals</a> article.
+	<a href="/doc/articles/slices_usage_and_internals.html">Slices: usage and internals</a> article.
 </step>
 
 <step title="Pushing the suffix onto the prefix" src="doc/codewalk/markov.go:/p\.Shift/">
@@ -275,16 +275,15 @@ p[len(p)-1] = suffix
 </step>
 
 <step title="Using this program" src="doc/codewalk/markov.go">
-	To use this program, first compile and link it.
-	If you are using <code>6g</code> as your compiler, the command
-	would look something like this:
+	To use this program, first build it with the
+	<a href="/cmd/go/">go</a> command:
 	<pre>
-$ 6g markov.go &amp;&amp; 6l -o markov markov.6</pre>
+$ go build markov.go</pre>
 	And then execute it while piping in some input text:
 	<pre>
-$ echo "a man a plan a canal panama" | ./markov -prefix=1
-a plan a man a plan a canal panama
-	</pre>
+$ echo "a man a plan a canal panama" \
+	| ./markov -prefix=1
+a plan a man a plan a canal panama</pre>
 	Here's a transcript of generating some text using the Go distribution's
 	README file as source material:
 	<pre>

@@ -125,41 +125,6 @@ func (b *Builder) recordResult(ok bool, pkg, hash, goHash, buildLog string, runT
 	return dash("POST", "result", args, req, nil)
 }
 
-// packages fetches a list of package paths from the dashboard
-func packages() (pkgs []string, err error) {
-	return nil, nil
-	/* TODO(adg): un-stub this once the new package builder design is done
-	var resp struct {
-		Packages []struct {
-			Path string
-		}
-	}
-	err = dash("GET", "package", &resp, param{"fmt": "json"})
-	if err != nil {
-		return
-	}
-	for _, p := range resp.Packages {
-		pkgs = append(pkgs, p.Path)
-	}
-	return
-	*/
-}
-
-// updatePackage sends package build results and info dashboard
-func (b *Builder) updatePackage(pkg string, ok bool, buildLog, info string) error {
-	return nil
-	/* TODO(adg): un-stub this once the new package builder design is done
-	return dash("POST", "package", nil, param{
-		"builder": b.name,
-		"key":     b.key,
-		"path":    pkg,
-		"ok":      strconv.FormatBool(ok),
-		"log":     buildLog,
-		"info":    info,
-	})
-	*/
-}
-
 func postCommit(key, pkg string, l *HgLog) error {
 	t, err := time.Parse(time.RFC3339, l.Date)
 	if err != nil {
@@ -169,7 +134,7 @@ func postCommit(key, pkg string, l *HgLog) error {
 		"PackagePath": pkg,
 		"Hash":        l.Hash,
 		"ParentHash":  l.Parent,
-		"Time":        t.Unix() * 1e6, // in microseconds, yuck!
+		"Time":        t.Format(time.RFC3339),
 		"User":        l.Author,
 		"Desc":        l.Desc,
 	}, nil)
@@ -183,11 +148,12 @@ func dashboardCommit(pkg, hash string) bool {
 	return err == nil
 }
 
-func dashboardPackages() []string {
+func dashboardPackages(kind string) []string {
+	args := url.Values{"kind": []string{kind}}
 	var resp []struct {
 		Path string
 	}
-	if err := dash("GET", "packages", nil, nil, &resp); err != nil {
+	if err := dash("GET", "packages", args, nil, &resp); err != nil {
 		log.Println("dashboardPackages:", err)
 		return nil
 	}

@@ -144,11 +144,11 @@ methods(Type *t)
 	Sig *a, *b;
 	Sym *method;
 
-	// named method type
-	mt = methtype(t);
+	// method type
+	mt = methtype(t, 0);
 	if(mt == T)
 		return nil;
-	expandmeth(mt->sym, mt);
+	expandmeth(mt);
 
 	// type stored in interface word
 	it = t;
@@ -357,7 +357,7 @@ dextratype(Sym *sym, int off, Type *t, int ptroff)
 	s = sym;
 	if(t->sym) {
 		ot = dgostringptr(s, ot, t->sym->name);
-		if(t != types[t->etype])
+		if(t != types[t->etype] && t != errortype)
 			ot = dgopkgpath(s, ot, t->sym->pkg);
 		else
 			ot = dgostringptr(s, ot, nil);
@@ -454,54 +454,17 @@ kinds[] =
 	[TUNSAFEPTR]	= KindUnsafePointer,
 };
 
-static char*
-structnames[] =
-{
-	[TINT]		= "*runtime.IntType",
-	[TUINT]		= "*runtime.UintType",
-	[TINT8]		= "*runtime.IntType",
-	[TUINT8]	= "*runtime.UintType",
-	[TINT16]	= "*runtime.IntType",
-	[TUINT16]	= "*runtime.UintType",
-	[TINT32]	= "*runtime.IntType",
-	[TUINT32]	= "*runtime.UintType",
-	[TINT64]	= "*runtime.IntType",
-	[TUINT64]	= "*runtime.UintType",
-	[TUINTPTR]	= "*runtime.UintType",
-	[TCOMPLEX64]	= "*runtime.ComplexType",
-	[TCOMPLEX128]	= "*runtime.ComplexType",
-	[TFLOAT32]	= "*runtime.FloatType",
-	[TFLOAT64]	= "*runtime.FloatType",
-	[TBOOL]		= "*runtime.BoolType",
-	[TSTRING]	= "*runtime.StringType",
-	[TUNSAFEPTR] =	"*runtime.UnsafePointerType",
-
-	[TPTR32]	= "*runtime.PtrType",
-	[TPTR64]	= "*runtime.PtrType",
-	[TSTRUCT]	= "*runtime.StructType",
-	[TINTER]	= "*runtime.InterfaceType",
-	[TCHAN]		= "*runtime.ChanType",
-	[TMAP]		= "*runtime.MapType",
-	[TARRAY]	= "*runtime.ArrayType",
-	[TFUNC]		= "*runtime.FuncType",
-};
-
 static Sym*
 typestruct(Type *t)
 {
-	char *name;
-	int et;
-
-	et = t->etype;
-	if(et < 0 || et >= nelem(structnames) || (name = structnames[et]) == nil) {
-		fatal("typestruct %lT", t);
-		return nil;	// silence gcc
-	}
-
-	if(isslice(t))
-		name = "*runtime.SliceType";
-
-	return pkglookup(name, typepkg);
+	// We use a weak reference to the reflect type
+	// to avoid requiring package reflect in every binary.
+	// If package reflect is available, the interface{} holding
+	// a runtime type will contain a *reflect.commonType.
+	// Otherwise it will use a nil type word but still be usable
+	// by package runtime (because we always use the memory
+	// after the interface value, not the interface value itself).
+	return pkglookup("*reflect.commonType", weaktypepkg);
 }
 
 int
@@ -580,7 +543,7 @@ dcommontype(Sym *s, int ot, Type *t)
 	ot = dsymptr(s, ot, typestruct(t), 0);
 	ot = dsymptr(s, ot, s, 2*widthptr);
 
-	// ../../pkg/runtime/type.go:/commonType
+	// ../../pkg/reflect/type.go:/^type.commonType
 	// actual type structure
 	//	type commonType struct {
 	//		size uintptr;
@@ -683,16 +646,9 @@ weaktypesym(Type *t)
 {
 	char *p;
 	Sym *s;
-	static Pkg *weak;
-	
-	if(weak == nil) {
-		weak = mkpkg(strlit("weak.type"));
-		weak->name = "weak.type";
-		weak->prefix = "weak.type";  // not weak%2etype
-	}
-	
+
 	p = smprint("%-T", t);
-	s = pkglookup(p, weak);
+	s = pkglookup(p, weaktypepkg);
 	//print("weaktypesym: %s -> %+S\n", p, s);
 	free(p);
 	return s;
@@ -951,7 +907,7 @@ dumptypestructs(void)
 	}
 }
 
-Sym*
+static Sym*
 dalgsym(Type *t)
 {
 	int ot;

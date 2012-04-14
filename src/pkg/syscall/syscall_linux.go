@@ -13,8 +13,6 @@ package syscall
 
 import "unsafe"
 
-const OS = "linux"
-
 /*
  * Wrapped
  */
@@ -153,18 +151,18 @@ func (w WaitStatus) ExitStatus() int {
 	return int(w>>shift) & 0xFF
 }
 
-func (w WaitStatus) Signal() int {
+func (w WaitStatus) Signal() Signal {
 	if !w.Signaled() {
 		return -1
 	}
-	return int(w & mask)
+	return Signal(w & mask)
 }
 
-func (w WaitStatus) StopSignal() int {
+func (w WaitStatus) StopSignal() Signal {
 	if !w.Stopped() {
 		return -1
 	}
-	return int(w>>shift) & 0xFF
+	return Signal(w>>shift) & 0xFF
 }
 
 func (w WaitStatus) TrapCause() int {
@@ -629,7 +627,7 @@ func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, err erro
 
 	// Remainder.
 	for len(out) > 0 {
-		// We use an internal buffer to gaurantee alignment.
+		// We use an internal buffer to guarantee alignment.
 		// It's not documented if this is necessary, but we're paranoid.
 		err = ptrace(req, pid, addr+uintptr(n), uintptr(unsafe.Pointer(&buf[0])))
 		if err != nil {
@@ -804,7 +802,7 @@ func Mount(source string, target string, fstype string, flags uintptr, data stri
 //sys	Close(fd int) (err error)
 //sys	Creat(path string, mode uint32) (fd int, err error)
 //sysnb	Dup(oldfd int) (fd int, err error)
-//sysnb	Dup2(oldfd int, newfd int) (fd int, err error)
+//sysnb	Dup2(oldfd int, newfd int) (err error)
 //sysnb	EpollCreate(size int) (fd int, err error)
 //sysnb	EpollCreate1(flag int) (fd int, err error)
 //sysnb	EpollCtl(epfd int, op int, fd int, event *EpollEvent) (err error)
@@ -832,7 +830,7 @@ func Mount(source string, target string, fstype string, flags uintptr, data stri
 //sysnb	InotifyInit() (fd int, err error)
 //sysnb	InotifyInit1(flags int) (fd int, err error)
 //sysnb	InotifyRmWatch(fd int, watchdesc uint32) (success int, err error)
-//sysnb	Kill(pid int, sig int) (err error)
+//sysnb	Kill(pid int, sig Signal) (err error)
 //sys	Klogctl(typ int, buf []byte) (n int, err error) = SYS_SYSLOG
 //sys	Link(oldpath string, newpath string) (err error)
 //sys	Mkdir(path string, mode uint32) (err error)
@@ -858,7 +856,7 @@ func Mount(source string, target string, fstype string, flags uintptr, data stri
 //sys	Sync()
 //sysnb	Sysinfo(info *Sysinfo_t) (err error)
 //sys	Tee(rfd int, wfd int, len int, flags int) (n int64, err error)
-//sysnb	Tgkill(tgid int, tid int, sig int) (err error)
+//sysnb	Tgkill(tgid int, tid int, sig Signal) (err error)
 //sysnb	Times(tms *Tms) (ticks uintptr, err error)
 //sysnb	Umask(mask int) (oldmask int)
 //sysnb	Uname(buf *Utsname) (err error)

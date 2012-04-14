@@ -232,6 +232,8 @@ ggloblnod(Node *nam, int32 width)
 	p->to.offset = width;
 	if(nam->readonly)
 		p->from.scale = RODATA;
+	if(nam->type != T && !haspointers(nam->type))
+		p->from.scale |= NOPTR;
 }
 
 void
@@ -783,7 +785,7 @@ ginit(void)
 		reg[resvd[i]]++;
 }
 
-ulong regpc[D_NONE];
+uintptr regpc[D_NONE];
 
 void
 gclean(void)
@@ -871,7 +873,7 @@ out:
 	if (i == D_SP)
 		print("alloc SP\n");
 	if(reg[i] == 0) {
-		regpc[i] = (ulong)getcallerpc(&n);
+		regpc[i] = (uintptr)getcallerpc(&n);
 		if(i == D_AX || i == D_CX || i == D_DX || i == D_SP) {
 			dump("regalloc-o", o);
 			fatal("regalloc %R", i);
@@ -893,7 +895,7 @@ regfree(Node *n)
 	i = n->val.u.reg;
 	if(i == D_SP)
 		return;
-	if(i < 0 || i >= sizeof(reg))
+	if(i < 0 || i >= nelem(reg))
 		fatal("regfree: reg out of range");
 	if(reg[i] <= 0)
 		fatal("regfree: reg not allocated");
@@ -1041,6 +1043,7 @@ int
 ismem(Node *n)
 {
 	switch(n->op) {
+	case OITAB:
 	case OLEN:
 	case OCAP:
 	case OINDREG:
@@ -1926,6 +1929,17 @@ naddr(Node *n, Addr *a, int canemitcode)
 				break;
 			}
 		fatal("naddr: OADDR\n");
+	
+	case OITAB:
+		// itable of interface value
+		naddr(n->left, a, canemitcode);
+		if(a->type == D_CONST && a->offset == 0)
+			break;	// len(nil)
+		a->etype = tptr;
+		a->width = widthptr;
+		if(a->offset >= unmappedzero && a->offset-Array_nel < unmappedzero)
+			checkoffset(a, canemitcode);
+		break;
 
 	case OLEN:
 		// len of string or slice

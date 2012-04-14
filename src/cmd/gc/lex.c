@@ -132,10 +132,26 @@ usage(void)
 {
 	print("gc: usage: %cg [flags] file.go...\n", thechar);
 	print("flags:\n");
-	// -A is allow use of "any" type, for bootstrapping
+	// -A allow use of "any" type, for bootstrapping
+	// -B disable bounds checking
+	// -E print imported declarations
+	// -K warn when lineno is zero
+	// -M print arguments to gmove
+	// -P print peephole diagnostics
+	// -R print optimizer diagnostics
+	// -g print code generation diagnostics
+	// -i print line history
+	// -j print variables to be initialized at runtime
+	// -r print generated helper functions
+	// -s print redundant types in composite literals
+	// -v print more information with -P or -R
+	// -y print declarations in cannedimports (used with -d)
+	// -% print non-static initializers
+	// -+ indicate that the runtime is being compiled
+	print("  -D PATH interpret local imports relative to this import path\n");
 	print("  -I DIR search for packages in DIR\n");
 	print("  -L show full path in file:line prints\n");
-	print("  -N disable optimizer\n");
+	print("  -N disable optimizations\n");
 	print("  -S print the assembly language\n");
 	print("  -V print the compiler version\n");
 	print("  -W print the parse tree after typing\n");
@@ -143,10 +159,10 @@ usage(void)
 	print("  -e no limit on number of errors printed\n");
 	print("  -f print stack frame structure\n");
 	print("  -h panic on an error\n");
-	print("  -m print about moves to heap\n");
+	print("  -l disable inlining\n");
+	print("  -m print optimization decisions\n");
 	print("  -o file specify output file\n");
 	print("  -p assumed import path for this code\n");
-	print("  -s disable escape analysis\n");
 	print("  -u disable package unsafe\n");
 	print("  -w print type checking details\n");
 	print("  -x print lex tokens\n");
@@ -171,7 +187,7 @@ int
 main(int argc, char *argv[])
 {
 	int i, c;
-	NodeList *l;
+	NodeList *l, *batch;
 	char *p;
 
 #ifdef	SIGBUS	
@@ -193,6 +209,10 @@ main(int argc, char *argv[])
 
 	typepkg = mkpkg(strlit("type"));
 	typepkg->name = "type";
+
+	weaktypepkg = mkpkg(strlit("weak.type"));
+	weaktypepkg->name = "weak.type";
+	weaktypepkg->prefix = "weak.type";  // not weak%2etype
 
 	unsafepkg = mkpkg(strlit("unsafe"));
 	unsafepkg->name = "unsafe";
@@ -219,14 +239,18 @@ main(int argc, char *argv[])
 		myimportpath = EARGF(usage());
 		break;
 
-	case 'I':
-		addidir(EARGF(usage()));
-		break;
-	
 	case 'u':
 		safemode = 1;
 		break;
 
+	case 'D':
+		localimport = EARGF(usage());
+		break;
+
+	case 'I':
+		addidir(EARGF(usage()));
+		break;
+	
 	case 'V':
 		p = expstring();
 		if(strcmp(p, "X:none") == 0)
@@ -234,6 +258,13 @@ main(int argc, char *argv[])
 		print("%cg version %s%s%s\n", thechar, getgoversion(), *p ? " " : "", p);
 		exits(0);
 	} ARGEND
+	
+	// enable inlining.  for now:
+	//	default: inlining on.  (debug['l'] == 1)
+	//	-l: inlining off  (debug['l'] == 0)
+	//	-ll, -lll: inlining on again, with extra debugging (debug['l'] > 1)
+	if(debug['l'] <= 1)
+		debug['l'] = 1 - debug['l'];
 
 	if(argc < 1)
 		usage();
@@ -337,20 +368,14 @@ main(int argc, char *argv[])
 		errorexit();
 
 	// Phase 4: Inlining
-	if (debug['l']) {  		// TODO only if debug['l'] > 1, otherwise lazily when used.
-		// Typecheck imported function bodies
-		for(l=importlist; l; l=l->next) {
-			if (l->n->inl == nil)
-				continue;
-			curfn = l->n;
-			saveerrors();
-			importpkg = l->n->sym->pkg;
-			if (debug['l']>2)
-				print("typecheck import [%S] %lN { %#H }\n", l->n->sym, l->n, l->n->inl);
-			typechecklist(l->n->inl, Etop);
-			importpkg = nil;
- 		}
-		curfn = nil;
+	if (debug['l'] > 1) {
+		// Typecheck imported function bodies if debug['l'] > 1,
+		// otherwise lazily when used or re-exported.
+		for(l=importlist; l; l=l->next)
+			if (l->n->inl) {
+				saveerrors();
+				typecheckinl(l->n);
+			}
 		
 		if(nsavederrors+nerrors)
 			errorexit();
@@ -370,7 +395,7 @@ main(int argc, char *argv[])
 
 	// Phase 5: escape analysis.
 	if(!debug['N'])
-		escapes();
+		escapes(xtop);
 
 	// Phase 6: Compile top level functions.
 	for(l=xtop; l; l=l->next)
@@ -381,10 +406,16 @@ main(int argc, char *argv[])
 		fninit(xtop);
 
 	// Phase 6b: Compile all closures.
+	// Can generate more closures, so run in batches.
 	while(closures) {
-		l = closures;
+		batch = closures;
 		closures = nil;
-		for(; l; l=l->next)
+		if(debug['l'])
+			for(l=batch; l; l=l->next)
+				inlcalls(l->n);
+		if(!debug['N'])
+			escapes(batch);
+		for(l=batch; l; l=l->next)
 			funccompile(l->n, 1);
 	}
 
@@ -483,14 +514,18 @@ addidir(char* dir)
 static int
 islocalname(Strlit *name)
 {
-	if(!windows && name->len >= 1 && name->s[0] == '/')
+	if(name->len >= 1 && name->s[0] == '/')
 		return 1;
 	if(windows && name->len >= 3 &&
 	   yy_isalpha(name->s[0]) && name->s[1] == ':' && name->s[2] == '/')
 	   	return 1;
 	if(name->len >= 2 && strncmp(name->s, "./", 2) == 0)
 		return 1;
+	if(name->len == 1 && strncmp(name->s, ".", 1) == 0)
+		return 1;
 	if(name->len >= 3 && strncmp(name->s, "../", 3) == 0)
+		return 1;
+	if(name->len == 2 && strncmp(name->s, "..", 2) == 0)
 		return 1;
 	return 0;
 }
@@ -547,6 +582,13 @@ findpkg(Strlit *name)
 	return 0;
 }
 
+static void
+fakeimport(void)
+{
+	importpkg = mkpkg(strlit("fake"));
+	cannedimports("fake.6", "$$\n");
+}
+
 void
 importfile(Val *f, int line)
 {
@@ -555,7 +597,7 @@ importfile(Val *f, int line)
 	int32 c;
 	int len;
 	Strlit *path;
-	char *cleanbuf;
+	char *cleanbuf, *prefix;
 
 	USED(line);
 
@@ -563,12 +605,19 @@ importfile(Val *f, int line)
 
 	if(f->ctype != CTSTR) {
 		yyerror("import statement not a string");
+		fakeimport();
 		return;
 	}
 
-	if(strlen(f->u.sval->s) != f->u.sval->len) {
-		yyerror("import path contains NUL");
-		errorexit();
+	if(f->u.sval->len == 0) {
+		yyerror("import path is empty");
+		fakeimport();
+		return;
+	}
+
+	if(isbadimport(f->u.sval)) {
+		fakeimport();
+		return;
 	}
 
 	// The package name main is no longer reserved,
@@ -597,8 +646,16 @@ importfile(Val *f, int line)
 	
 	path = f->u.sval;
 	if(islocalname(path)) {
-		cleanbuf = mal(strlen(pathname) + strlen(path->s) + 2);
-		strcpy(cleanbuf, pathname);
+		if(path->s[0] == '/') {
+			yyerror("import path cannot be absolute path");
+			fakeimport();
+			return;
+		}
+		prefix = pathname;
+		if(localimport != nil)
+			prefix = localimport;
+		cleanbuf = mal(strlen(prefix) + strlen(path->s) + 2);
+		strcpy(cleanbuf, prefix);
 		strcat(cleanbuf, "/");
 		strcat(cleanbuf, path->s);
 		cleanname(cleanbuf);

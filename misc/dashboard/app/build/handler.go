@@ -5,21 +5,19 @@
 package build
 
 import (
+	"crypto/hmac"
+	"crypto/md5"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
 	"appengine"
 	"appengine/datastore"
-	"crypto/hmac"
-	"fmt"
-	"http"
-	"json"
-	"os"
+	"cache"
 )
 
 const commitsPerPage = 30
-
-// defaultPackages specifies the Package records to be created by initHandler.
-var defaultPackages = []*Package{
-	&Package{Name: "Go"},
-}
 
 // commitHandler retrieves commit data or records a new commit.
 //
@@ -31,7 +29,7 @@ var defaultPackages = []*Package{
 // each new commit at tip.
 //
 // This handler is used by a gobuilder process in -commit mode.
-func commitHandler(r *http.Request) (interface{}, os.Error) {
+func commitHandler(r *http.Request) (interface{}, error) {
 	c := appengine.NewContext(r)
 	com := new(Commit)
 
@@ -58,8 +56,8 @@ func commitHandler(r *http.Request) (interface{}, os.Error) {
 	if err := com.Valid(); err != nil {
 		return nil, fmt.Errorf("validating Commit: %v", err)
 	}
-	defer invalidateCache(c)
-	tx := func(c appengine.Context) os.Error {
+	defer cache.Tick(c)
+	tx := func(c appengine.Context) error {
 		return addCommit(c, com)
 	}
 	return nil, datastore.RunInTransaction(c, tx, nil)
@@ -67,7 +65,7 @@ func commitHandler(r *http.Request) (interface{}, os.Error) {
 
 // addCommit adds the Commit entity to the datastore and updates the tip Tag.
 // It must be run inside a datastore transaction.
-func addCommit(c appengine.Context, com *Commit) os.Error {
+func addCommit(c appengine.Context, com *Commit) error {
 	var tc Commit // temp value so we don't clobber com
 	err := datastore.Get(c, com.Key(c), &tc)
 	if err != datastore.ErrNoSuchEntity {
@@ -97,7 +95,7 @@ func addCommit(c appengine.Context, com *Commit) os.Error {
 			return fmt.Errorf("testing for parent Commit: %v", err)
 		}
 		if n == 0 {
-			return os.NewError("parent commit not found")
+			return errors.New("parent commit not found")
 		}
 	}
 	// update the tip Tag if this is the Go repo
@@ -118,7 +116,7 @@ func addCommit(c appengine.Context, com *Commit) os.Error {
 // request body and updates the Tag entity for the Kind of tag provided.
 //
 // This handler is used by a gobuilder process in -commit mode.
-func tagHandler(r *http.Request) (interface{}, os.Error) {
+func tagHandler(r *http.Request) (interface{}, error) {
 	if r.Method != "POST" {
 		return nil, errBadMethod(r.Method)
 	}
@@ -132,7 +130,7 @@ func tagHandler(r *http.Request) (interface{}, os.Error) {
 		return nil, err
 	}
 	c := appengine.NewContext(r)
-	defer invalidateCache(c)
+	defer cache.Tick(c)
 	_, err := datastore.Put(c, t.Key(c), t)
 	return nil, err
 }
@@ -146,18 +144,15 @@ type Todo struct {
 // todoHandler returns the next action to be performed by a builder.
 // It expects "builder" and "kind" query parameters and returns a *Todo value.
 // Multiple "kind" parameters may be specified.
-func todoHandler(r *http.Request) (interface{}, os.Error) {
+func todoHandler(r *http.Request) (interface{}, error) {
 	c := appengine.NewContext(r)
-
-	todoKey := r.Form.Encode()
-	if t, ok := cachedTodo(c, todoKey); ok {
-		c.Debugf("cache hit")
-		return t, nil
-	}
-	c.Debugf("cache miss")
-
+	now := cache.Now(c)
+	key := "build-todo-" + r.Form.Encode()
 	var todo *Todo
-	var err os.Error
+	if cache.Get(r, now, key, &todo) {
+		return todo, nil
+	}
+	var err error
 	builder := r.FormValue("builder")
 	for _, kind := range r.Form["kind"] {
 		var data interface{}
@@ -175,7 +170,7 @@ func todoHandler(r *http.Request) (interface{}, os.Error) {
 		}
 	}
 	if err == nil {
-		cacheTodo(c, todoKey, todo)
+		cache.Set(r, now, key, todo)
 	}
 	return todo, err
 }
@@ -189,7 +184,7 @@ func todoHandler(r *http.Request) (interface{}, os.Error) {
 // If provided with non-empty packagePath and goHash args, it scans the first
 // 20 Commits in Num-descending order for the specified packagePath and
 // returns the first that doesn't have a Result for this builder and goHash.
-func buildTodo(c appengine.Context, builder, packagePath, goHash string) (interface{}, os.Error) {
+func buildTodo(c appengine.Context, builder, packagePath, goHash string) (interface{}, error) {
 	p, err := GetPackage(c, packagePath)
 	if err != nil {
 		return nil, err
@@ -202,23 +197,76 @@ func buildTodo(c appengine.Context, builder, packagePath, goHash string) (interf
 		Run(c)
 	for {
 		com := new(Commit)
-		if _, err := t.Next(com); err != nil {
-			if err == datastore.Done {
-				err = nil
-			}
+		if _, err := t.Next(com); err == datastore.Done {
+			break
+		} else if err != nil {
 			return nil, err
 		}
 		if com.Result(builder, goHash) == nil {
 			return com, nil
 		}
 	}
-	panic("unreachable")
+
+	// Nothing left to do if this is a package (not the Go tree).
+	if packagePath != "" {
+		return nil, nil
+	}
+
+	// If there are no Go tree commits left to build,
+	// see if there are any subrepo commits that need to be built at tip.
+	// If so, ask the builder to build a go tree at the tip commit.
+	// TODO(adg): do the same for "weekly" and "release" tags.
+
+	tag, err := GetTag(c, "tip")
+	if err != nil {
+		return nil, err
+	}
+
+	// Check that this Go commit builds OK for this builder.
+	// If not, don't re-build as the subrepos will never get built anyway.
+	com, err := tag.Commit(c)
+	if err != nil {
+		return nil, err
+	}
+	if r := com.Result(builder, ""); r != nil && !r.OK {
+		return nil, nil
+	}
+
+	pkgs, err := Packages(c, "subrepo")
+	if err != nil {
+		return nil, err
+	}
+	for _, pkg := range pkgs {
+		com, err := pkg.LastCommit(c)
+		if err != nil {
+			c.Warningf("%v: no Commit found: %v", pkg, err)
+			continue
+		}
+		if com.Result(builder, tag.Hash) == nil {
+			return tag.Commit(c)
+		}
+	}
+
+	return nil, nil
 }
 
 // packagesHandler returns a list of the non-Go Packages monitored
 // by the dashboard.
-func packagesHandler(r *http.Request) (interface{}, os.Error) {
-	return Packages(appengine.NewContext(r))
+func packagesHandler(r *http.Request) (interface{}, error) {
+	kind := r.FormValue("kind")
+	c := appengine.NewContext(r)
+	now := cache.Now(c)
+	key := "build-packages-" + kind
+	var p []*Package
+	if cache.Get(r, now, key, &p) {
+		return p, nil
+	}
+	p, err := Packages(c, kind)
+	if err != nil {
+		return nil, err
+	}
+	cache.Set(r, now, key, p)
+	return p, nil
 }
 
 // resultHandler records a build result.
@@ -226,7 +274,7 @@ func packagesHandler(r *http.Request) (interface{}, os.Error) {
 // creates a new Result entity, and updates the relevant Commit entity.
 // If the Log field is not empty, resultHandler creates a new Log entity
 // and updates the LogHash field before putting the Commit entity.
-func resultHandler(r *http.Request) (interface{}, os.Error) {
+func resultHandler(r *http.Request) (interface{}, error) {
 	if r.Method != "POST" {
 		return nil, errBadMethod(r.Method)
 	}
@@ -240,7 +288,7 @@ func resultHandler(r *http.Request) (interface{}, os.Error) {
 	if err := res.Valid(); err != nil {
 		return nil, fmt.Errorf("validating Result: %v", err)
 	}
-	defer invalidateCache(c)
+	defer cache.Tick(c)
 	// store the Log text if supplied
 	if len(res.Log) > 0 {
 		hash, err := PutLog(c, res.Log)
@@ -249,7 +297,7 @@ func resultHandler(r *http.Request) (interface{}, os.Error) {
 		}
 		res.LogHash = hash
 	}
-	tx := func(c appengine.Context) os.Error {
+	tx := func(c appengine.Context) error {
 		// check Package exists
 		if _, err := GetPackage(c, res.PackagePath); err != nil {
 			return fmt.Errorf("GetPackage: %v", err)
@@ -291,7 +339,7 @@ func logHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-type dashHandler func(*http.Request) (interface{}, os.Error)
+type dashHandler func(*http.Request) (interface{}, error)
 
 type dashResponse struct {
 	Response interface{}
@@ -302,7 +350,7 @@ type dashResponse struct {
 // the request has an unsuitable method.
 type errBadMethod string
 
-func (e errBadMethod) String() string {
+func (e errBadMethod) Error() string {
 	return "bad method: " + string(e)
 }
 
@@ -316,14 +364,14 @@ func AuthHandler(h dashHandler) http.HandlerFunc {
 		// request body when calling r.FormValue.
 		r.Form = r.URL.Query()
 
-		var err os.Error
+		var err error
 		var resp interface{}
 
 		// Validate key query parameter for POST requests only.
 		key := r.FormValue("key")
 		builder := r.FormValue("builder")
 		if r.Method == "POST" && !validKey(c, key, builder) {
-			err = os.NewError("invalid key: " + key)
+			err = errors.New("invalid key: " + key)
 		}
 
 		// Call the original HandlerFunc and return the response.
@@ -335,7 +383,7 @@ func AuthHandler(h dashHandler) http.HandlerFunc {
 		dashResp := &dashResponse{Response: resp}
 		if err != nil {
 			c.Errorf("%v", err)
-			dashResp.Error = err.String()
+			dashResp.Error = err.Error()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err = json.NewEncoder(w).Encode(dashResp); err != nil {
@@ -344,28 +392,10 @@ func AuthHandler(h dashHandler) http.HandlerFunc {
 	}
 }
 
-func initHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO(adg): devise a better way of bootstrapping new packages
-	c := appengine.NewContext(r)
-	for _, p := range defaultPackages {
-		if err := datastore.Get(c, p.Key(c), new(Package)); err == nil {
-			continue
-		} else if err != datastore.ErrNoSuchEntity {
-			logErr(w, r, err)
-			return
-		}
-		if _, err := datastore.Put(c, p.Key(c), p); err != nil {
-			logErr(w, r, err)
-			return
-		}
-	}
-	fmt.Fprint(w, "OK")
-}
-
 func keyHandler(w http.ResponseWriter, r *http.Request) {
 	builder := r.FormValue("builder")
 	if builder == "" {
-		logErr(w, r, os.NewError("must supply builder in query string"))
+		logErr(w, r, errors.New("must supply builder in query string"))
 		return
 	}
 	c := appengine.NewContext(r)
@@ -404,12 +434,12 @@ func validKey(c appengine.Context, key, builder string) bool {
 }
 
 func builderKey(c appengine.Context, builder string) string {
-	h := hmac.NewMD5([]byte(secretKey(c)))
+	h := hmac.New(md5.New, []byte(secretKey(c)))
 	h.Write([]byte(builder))
-	return fmt.Sprintf("%x", h.Sum())
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func logErr(w http.ResponseWriter, r *http.Request, err os.Error) {
+func logErr(w http.ResponseWriter, r *http.Request, err error) {
 	appengine.NewContext(r).Errorf("Error: %v", err)
 	w.WriteHeader(http.StatusInternalServerError)
 	fmt.Fprint(w, "Error: ", err)

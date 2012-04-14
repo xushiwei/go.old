@@ -344,8 +344,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 			if _, err := strconv.Atoi(n.Define); err == nil {
 				ok = true
 			} else if n.Define[0] == '"' || n.Define[0] == '\'' {
-				_, err := parser.ParseExpr(fset, "", n.Define)
-				if err == nil {
+				if _, err := parser.ParseExpr(n.Define); err == nil {
 					ok = true
 				}
 			}
@@ -453,6 +452,11 @@ func (p *Package) guessKinds(f *File) []*Name {
 	for i, b := range isConst {
 		if b {
 			names[i].Kind = "const"
+			if toSniff[i] != nil && names[i].Const == "" {
+				j := len(needType)
+				needType = needType[0 : j+1]
+				needType[j] = names[i]
+			}
 		}
 	}
 	for _, n := range toSniff {
@@ -519,6 +523,10 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 	nameToIndex := make(map[*Name]int)
 	for i, n := range names {
 		nameToIndex[n] = i
+	}
+	nameToRef := make(map[*Name]*Ref)
+	for _, ref := range f.Ref {
+		nameToRef[ref.Name] = ref
 	}
 	r := d.Reader()
 	for {
@@ -593,12 +601,16 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 		if types[i] == nil {
 			continue
 		}
+		pos := token.NoPos
+		if ref, ok := nameToRef[n]; ok {
+			pos = ref.Pos()
+		}
 		f, fok := types[i].(*dwarf.FuncType)
 		if n.Kind != "type" && fok {
 			n.Kind = "func"
-			n.FuncType = conv.FuncType(f)
+			n.FuncType = conv.FuncType(f, pos)
 		} else {
-			n.Type = conv.Type(types[i])
+			n.Type = conv.Type(types[i], pos)
 			if enums[i] != 0 && n.Type.EnumValues != nil {
 				k := fmt.Sprintf("__cgo_enum__%d", i)
 				n.Kind = "const"
@@ -697,7 +709,7 @@ func (p *Package) rewriteRef(f *File) {
 			// Substitute definition for mangled type name.
 			if id, ok := expr.(*ast.Ident); ok {
 				if t := typedef[id.Name]; t != nil {
-					expr = t
+					expr = t.Go
 				}
 				if id.Name == r.Name.Mangle && r.Name.Const != "" {
 					expr = ast.NewIdent(r.Name.Const)
@@ -882,7 +894,7 @@ type typeConv struct {
 }
 
 var tagGen int
-var typedef = make(map[string]ast.Expr)
+var typedef = make(map[string]*Type)
 var goIdent = make(map[string]*ast.Ident)
 
 func (c *typeConv) Init(ptrSize int64) {
@@ -968,10 +980,10 @@ func (tr *TypeRepr) Set(repr string, fargs ...interface{}) {
 
 // Type returns a *Type with the same memory layout as
 // dtype when used as the type of a variable or a struct field.
-func (c *typeConv) Type(dtype dwarf.Type) *Type {
+func (c *typeConv) Type(dtype dwarf.Type, pos token.Pos) *Type {
 	if t, ok := c.m[dtype]; ok {
 		if t.Go == nil {
-			fatalf("type conversion loop at %s", dtype)
+			fatalf("%s: type conversion loop at %s", lineno(pos), dtype)
 		}
 		return t
 	}
@@ -994,11 +1006,11 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 	switch dt := dtype.(type) {
 	default:
-		fatalf("unexpected type: %s", dtype)
+		fatalf("%s: unexpected type: %s", lineno(pos), dtype)
 
 	case *dwarf.AddrType:
 		if t.Size != c.ptrSize {
-			fatalf("unexpected: %d-byte address type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte address type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.uintptr
 		t.Align = t.Size
@@ -1013,7 +1025,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			Len: c.intExpr(dt.Count),
 		}
 		t.Go = gt // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		t.Align = sub.Align
 		gt.Elt = sub.Go
 		t.C.Set("typeof(%s[%d])", sub.C, dt.Count)
@@ -1024,7 +1036,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 	case *dwarf.CharType:
 		if t.Size != 1 {
-			fatalf("unexpected: %d-byte char type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte char type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.int8
 		t.Align = 1
@@ -1044,7 +1056,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		}
 		switch t.Size + int64(signed) {
 		default:
-			fatalf("unexpected: %d-byte enum type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte enum type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.uint8
 		case 2:
@@ -1066,7 +1078,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 	case *dwarf.FloatType:
 		switch t.Size {
 		default:
-			fatalf("unexpected: %d-byte float type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte float type - %s", lineno(pos), t.Size, dtype)
 		case 4:
 			t.Go = c.float32
 		case 8:
@@ -1079,7 +1091,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 	case *dwarf.ComplexType:
 		switch t.Size {
 		default:
-			fatalf("unexpected: %d-byte complex type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte complex type - %s", lineno(pos), t.Size, dtype)
 		case 8:
 			t.Go = c.complex64
 		case 16:
@@ -1097,11 +1109,11 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 	case *dwarf.IntType:
 		if dt.BitSize > 0 {
-			fatalf("unexpected: %d-bit int type - %s", dt.BitSize, dtype)
+			fatalf("%s: unexpected: %d-bit int type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 		switch t.Size {
 		default:
-			fatalf("unexpected: %d-byte int type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte int type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.int8
 		case 2:
@@ -1127,13 +1139,13 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 		gt := &ast.StarExpr{}
 		t.Go = gt // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		gt.X = sub.Go
 		t.C.Set("%s*", sub.C)
 
 	case *dwarf.QualType:
 		// Ignore qualifier.
-		t = c.Type(dt.Type)
+		t = c.Type(dt.Type, pos)
 		c.m[dtype] = t
 		return t
 
@@ -1152,17 +1164,23 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		goIdent[name.Name] = name
 		switch dt.Kind {
 		case "union", "class":
-			typedef[name.Name] = c.Opaque(t.Size)
+			t.Go = c.Opaque(t.Size)
 			if t.C.Empty() {
 				t.C.Set("typeof(unsigned char[%d])", t.Size)
 			}
+			typedef[name.Name] = t
 		case "struct":
-			g, csyntax, align := c.Struct(dt)
+			g, csyntax, align := c.Struct(dt, pos)
 			if t.C.Empty() {
 				t.C.Set(csyntax)
 			}
 			t.Align = align
-			typedef[name.Name] = g
+			tt := *t
+			if tag != "" {
+				tt.C = &TypeRepr{"struct %s", []interface{}{tag}}
+			}
+			tt.Go = g
+			typedef[name.Name] = &tt
 		}
 
 	case *dwarf.TypedefType:
@@ -1187,11 +1205,13 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		name := c.Ident("_Ctype_" + dt.Name)
 		goIdent[name.Name] = name
 		t.Go = name // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		t.Size = sub.Size
 		t.Align = sub.Align
 		if _, ok := typedef[name.Name]; !ok {
-			typedef[name.Name] = sub.Go
+			tt := *t
+			tt.Go = sub.Go
+			typedef[name.Name] = &tt
 		}
 		if *godefs || *cdefs {
 			t.Go = sub.Go
@@ -1199,18 +1219,18 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 	case *dwarf.UcharType:
 		if t.Size != 1 {
-			fatalf("unexpected: %d-byte uchar type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte uchar type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.uint8
 		t.Align = 1
 
 	case *dwarf.UintType:
 		if dt.BitSize > 0 {
-			fatalf("unexpected: %d-bit uint type - %s", dt.BitSize, dtype)
+			fatalf("%s: unexpected: %d-bit uint type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 		switch t.Size {
 		default:
-			fatalf("unexpected: %d-byte uint type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte uint type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.uint8
 		case 2:
@@ -1238,7 +1258,8 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			}
 			s = strings.Join(strings.Split(s, " "), "") // strip spaces
 			name := c.Ident("_Ctype_" + s)
-			typedef[name.Name] = t.Go
+			tt := *t
+			typedef[name.Name] = &tt
 			if !*godefs && !*cdefs {
 				t.Go = name
 			}
@@ -1246,7 +1267,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 	}
 
 	if t.C.Empty() {
-		fatalf("internal error: did not create C name for %s", dtype)
+		fatalf("%s: internal error: did not create C name for %s", lineno(pos), dtype)
 	}
 
 	return t
@@ -1254,8 +1275,8 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 // FuncArg returns a Go type with the same memory layout as
 // dtype when used as the type of a C function argument.
-func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
-	t := c.Type(dtype)
+func (c *typeConv) FuncArg(dtype dwarf.Type, pos token.Pos) *Type {
+	t := c.Type(dtype, pos)
 	switch dt := dtype.(type) {
 	case *dwarf.ArrayType:
 		// Arrays are passed implicitly as pointers in C.
@@ -1276,9 +1297,18 @@ func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
 		if ptr, ok := base(dt.Type).(*dwarf.PtrType); ok {
 			// Unless the typedef happens to point to void* since
 			// Go has special rules around using unsafe.Pointer.
-			if _, void := base(ptr.Type).(*dwarf.VoidType); !void {
-				return c.Type(ptr)
+			if _, void := base(ptr.Type).(*dwarf.VoidType); void {
+				break
 			}
+
+			t = c.Type(ptr, pos)
+			if t == nil {
+				return nil
+			}
+
+			// Remember the C spelling, in case the struct
+			// has __attribute__((unavailable)) on it.  See issue 2888.
+			t.Typedef = dt.Name
 		}
 	}
 	return t
@@ -1286,7 +1316,7 @@ func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
 
 // FuncType returns the Go type analogous to dtype.
 // There is no guarantee about matching memory layout.
-func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
+func (c *typeConv) FuncType(dtype *dwarf.FuncType, pos token.Pos) *FuncType {
 	p := make([]*Type, len(dtype.ParamType))
 	gp := make([]*ast.Field, len(dtype.ParamType))
 	for i, f := range dtype.ParamType {
@@ -1299,13 +1329,13 @@ func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
 			p, gp = nil, nil
 			break
 		}
-		p[i] = c.FuncArg(f)
+		p[i] = c.FuncArg(f, pos)
 		gp[i] = &ast.Field{Type: p[i].Go}
 	}
 	var r *Type
 	var gr []*ast.Field
 	if _, ok := dtype.ReturnType.(*dwarf.VoidType); !ok && dtype.ReturnType != nil {
-		r = c.Type(dtype.ReturnType)
+		r = c.Type(dtype.ReturnType, pos)
 		gr = []*ast.Field{{Type: r.Go}}
 	}
 	return &FuncType{
@@ -1348,7 +1378,7 @@ func (c *typeConv) pad(fld []*ast.Field, size int64) []*ast.Field {
 }
 
 // Struct conversion: return Go and (6g) C syntax for type.
-func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax string, align int64) {
+func (c *typeConv) Struct(dt *dwarf.StructType, pos token.Pos) (expr *ast.StructType, csyntax string, align int64) {
 	var buf bytes.Buffer
 	buf.WriteString("struct {")
 	fld := make([]*ast.Field, 0, 2*len(dt.Field)+1) // enough for padding around every field
@@ -1369,7 +1399,7 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 
 	if !*godefs && !*cdefs {
 		for cid, goid := range ident {
-			if token.Lookup([]byte(goid)).IsKeyword() {
+			if token.Lookup(goid).IsKeyword() {
 				// Avoid keyword
 				goid = "_" + goid
 
@@ -1390,7 +1420,7 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 			fld = c.pad(fld, f.ByteOffset-off)
 			off = f.ByteOffset
 		}
-		t := c.Type(f.Type)
+		t := c.Type(f.Type, pos)
 		tgo := t.Go
 		size := t.Size
 
@@ -1431,7 +1461,7 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 		off = dt.ByteSize
 	}
 	if off != dt.ByteSize {
-		fatalf("struct size calculation error")
+		fatalf("%s: struct size calculation error off=%d bytesize=%d", lineno(pos), off, dt.ByteSize)
 	}
 	buf.WriteString("}")
 	csyntax = buf.String()

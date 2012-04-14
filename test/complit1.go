@@ -1,8 +1,11 @@
-// errchk $G -e $D/$F.go
+// errorcheck
 
 // Copyright 2011 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+// Verify that illegal composite literals are detected.
+// Does not compile.
 
 package main
 
@@ -34,6 +37,6 @@ type T struct {
 
 var (
 	_ = &T{0, 0, "", nil}               // ok
-	_ = &T{i: 0, f: 0, s: "", next: {}} // ERROR "missing type in composite literal"
-	_ = &T{0, 0, "", {}}                // ERROR "missing type in composite literal"
+	_ = &T{i: 0, f: 0, s: "", next: {}} // ERROR "missing type in composite literal|omit types within composite literal"
+	_ = &T{0, 0, "", {}}                // ERROR "missing type in composite literal|omit types within composite literal"
 )

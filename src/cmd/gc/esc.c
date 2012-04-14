@@ -59,19 +59,21 @@ static int	dstcount, edgecount;	// diagnostic
 static NodeList*	noesc;	// list of possible non-escaping nodes, for printing
 
 void
-escapes(void)
+escapes(NodeList *all)
 {
 	NodeList *l;
 
 	theSink.op = ONAME;
+	theSink.orig = &theSink;
 	theSink.class = PEXTERN;
 	theSink.sym = lookup(".sink");
 	theSink.escloopdepth = -1;
 
 	safetag = strlit("noescape");
+	noesc = nil;
 
-	// flow-analyze top level functions
-	for(l=xtop; l; l=l->next)
+	// flow-analyze functions
+	for(l=all; l; l=l->next)
 		if(l->n->op == ODCLFUNC || l->n->op == OCLOSURE)
 			escfunc(l->n);
 
@@ -83,7 +85,7 @@ escapes(void)
 		escflood(l->n);
 
 	// for all top level functions, tag the typenodes corresponding to the param nodes
-	for(l=xtop; l; l=l->next)
+	for(l=all; l; l=l->next)
 		if(l->n->op == ODCLFUNC)
 			esctag(l->n);
 
@@ -469,10 +471,14 @@ escassign(Node *dst, Node *src)
 		escflows(dst, src);
 		break;
 
+	case ODOT:
+		// A non-pointer escaping from a struct does not concern us.
+		if(src->type && !haspointers(src->type))
+			break;
+		// fallthrough
 	case OCONV:
 	case OCONVIFACE:
 	case OCONVNOP:
-	case ODOT:
 	case ODOTMETH:	// treat recv.meth as a value with recv in it, only happens in ODEFER and OPROC
 			// iface.method already leaks iface in esccall, no need to put in extra ODOTINTER edge here
 	case ODOTTYPE:

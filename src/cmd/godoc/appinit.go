@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build ignore
+// +build appengine
 
 package main
 
@@ -19,7 +19,7 @@ import (
 func serveError(w http.ResponseWriter, r *http.Request, relpath string, err error) {
 	contents := applyTemplate(errorHTML, "errorHTML", err) // err may contain an absolute path!
 	w.WriteHeader(http.StatusNotFound)
-	servePage(w, "File "+relpath, "", "", contents)
+	servePage(w, relpath, "File "+relpath, "", "", contents)
 }
 
 func init() {
@@ -42,8 +42,7 @@ func init() {
 		log.Fatalf("%s: %s\n", zipfile, err)
 	}
 	// rc is never closed (app running forever)
-	fs = NewZipFS(rc)
-	fsHttp = NewHttpZipFS(rc, *goroot)
+	fs.Bind("/", NewZipFS(rc, zipFilename), *goroot, bindReplace)
 
 	// initialize http handlers
 	readTemplates()
@@ -53,8 +52,8 @@ func init() {
 	// initialize default directory tree with corresponding timestamp.
 	initFSTree()
 
-	// initialize directory trees for user-defined file systems (-path flag).
-	initDirTrees()
+	// Immediately update metadata.
+	updateMetadata()
 
 	// initialize search index
 	if *indexEnabled {

@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -14,11 +15,12 @@ import (
 	"go/printer"
 	"go/token"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"path"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -53,16 +55,13 @@ var (
 
 	// file system roots
 	// TODO(gri) consider the invariant that goroot always end in '/'
-	goroot      = flag.String("goroot", runtime.GOROOT(), "Go root directory")
-	testDir     = flag.String("testdir", "", "Go root subdirectory - for testing only (faster startups)")
-	pkgPath     = flag.String("path", "", "additional package directories (colon-separated)")
-	filter      = flag.String("filter", "", "filter file containing permitted package directory paths")
-	filterMin   = flag.Int("filter_minutes", 0, "filter file update interval in minutes; disabled if <= 0")
-	filterDelay delayTime // actual filter update interval in minutes; usually filterDelay == filterMin, but filterDelay may back off exponentially
+	goroot  = flag.String("goroot", runtime.GOROOT(), "Go root directory")
+	testDir = flag.String("testdir", "", "Go root subdirectory - for testing only (faster startups)")
+	pkgPath = flag.String("path", "", "additional package directories (colon-separated)")
 
 	// layout control
 	tabwidth       = flag.Int("tabwidth", 4, "tab width")
-	showTimestamps = flag.Bool("timestamps", true, "show timestamps with directory listings")
+	showTimestamps = flag.Bool("timestamps", false, "show timestamps with directory listings")
 	templateDir    = flag.String("templates", "", "directory containing alternate template files")
 
 	// search index
@@ -72,39 +71,38 @@ var (
 	maxResults    = flag.Int("maxresults", 10000, "maximum number of full text search results shown")
 	indexThrottle = flag.Float64("index_throttle", 0.75, "index throttle value; 0.0 = no time allocated, 1.0 = full throttle")
 
-	// file system mapping
-	fs         FileSystem      // the underlying file system for godoc
-	fsHttp     http.FileSystem // the underlying file system for http
-	fsMap      Mapping         // user-defined mapping
-	fsTree     RWValue         // *Directory tree of packages, updated with each sync
-	pathFilter RWValue         // filter used when building fsMap directory trees
-	fsModified RWValue         // timestamp of last call to invalidateIndex
+	// file system information
+	fsTree      RWValue // *Directory tree of packages, updated with each sync (but sync code is removed now)
+	fsModified  RWValue // timestamp of last call to invalidateIndex
+	docMetadata RWValue // mapping from paths to *Metadata
 
 	// http handlers
 	fileServer http.Handler // default file server
-	cmdHandler httpHandler
-	pkgHandler httpHandler
+	cmdHandler docServer
+	pkgHandler docServer
 )
 
 func initHandlers() {
-	paths := filepath.SplitList(*pkgPath)
-	for _, t := range build.Path {
-		if t.Goroot {
-			continue
+	// Add named directories in -path argument as
+	// subdirectories of src/pkg.
+	for _, p := range filepath.SplitList(*pkgPath) {
+		_, elem := filepath.Split(p)
+		if elem == "" {
+			log.Fatalf("invalid -path argument: %q has no final element", p)
 		}
-		paths = append(paths, t.SrcDir())
+		fs.Bind("/src/pkg/"+elem, OS(p), "/", bindReplace)
 	}
-	fsMap.Init(paths)
 
-	fileServer = http.FileServer(fsHttp)
-	cmdHandler = httpHandler{"/cmd/", filepath.Join(*goroot, "src", "cmd"), false}
-	pkgHandler = httpHandler{"/pkg/", filepath.Join(*goroot, "src", "pkg"), true}
+	fileServer = http.FileServer(&httpFS{fs})
+	cmdHandler = docServer{"/cmd/", "/src/cmd", false}
+	pkgHandler = docServer{"/pkg/", "/src/pkg", true}
 }
 
 func registerPublicHandlers(mux *http.ServeMux) {
 	mux.Handle(cmdHandler.pattern, &cmdHandler)
 	mux.Handle(pkgHandler.pattern, &pkgHandler)
 	mux.HandleFunc("/doc/codewalk/", codewalk)
+	mux.Handle("/doc/play/", fileServer)
 	mux.HandleFunc("/search", search)
 	mux.Handle("/robots.txt", fileServer)
 	mux.HandleFunc("/opensearch.xml", serveSearchDesc)
@@ -112,179 +110,13 @@ func registerPublicHandlers(mux *http.ServeMux) {
 }
 
 func initFSTree() {
-	fsTree.set(newDirectory(filepath.Join(*goroot, *testDir), nil, -1))
-	invalidateIndex()
-}
-
-// ----------------------------------------------------------------------------
-// Directory filters
-
-// isParentOf returns true if p is a parent of (or the same as) q
-// where p and q are directory paths.
-func isParentOf(p, q string) bool {
-	n := len(p)
-	return strings.HasPrefix(q, p) && (len(q) <= n || q[n] == '/')
-}
-
-func setPathFilter(list []string) {
-	if len(list) == 0 {
-		pathFilter.set(nil)
+	dir := newDirectory(pathpkg.Join("/", *testDir), -1)
+	if dir == nil {
+		log.Println("Warning: FSTree is nil")
 		return
 	}
-
-	// len(list) > 0
-	pathFilter.set(func(path string) bool {
-		// list is sorted in increasing order and for each path all its children are removed
-		i := sort.Search(len(list), func(i int) bool { return list[i] > path })
-		// Now we have list[i-1] <= path < list[i].
-		// Path may be a child of list[i-1] or a parent of list[i].
-		return i > 0 && isParentOf(list[i-1], path) || i < len(list) && isParentOf(path, list[i])
-	})
-}
-
-func getPathFilter() func(string) bool {
-	f, _ := pathFilter.get()
-	if f != nil {
-		return f.(func(string) bool)
-	}
-	return nil
-}
-
-// readDirList reads a file containing a newline-separated list
-// of directory paths and returns the list of paths.
-func readDirList(filename string) ([]string, error) {
-	contents, err := ReadFile(fs, filename)
-	if err != nil {
-		return nil, err
-	}
-	// create a sorted list of valid directory names
-	filter := func(path string) bool {
-		d, e := fs.Lstat(path)
-		if e != nil && err == nil {
-			// remember first error and return it from readDirList
-			// so we have at least some information if things go bad
-			err = e
-		}
-		return e == nil && isPkgDir(d)
-	}
-	list := canonicalizePaths(strings.Split(string(contents), "\n"), filter)
-	// for each parent path, remove all its children q
-	// (requirement for binary search to work when filtering)
-	i := 0
-	for _, q := range list {
-		if i == 0 || !isParentOf(list[i-1], q) {
-			list[i] = q
-			i++
-		}
-	}
-	return list[0:i], err
-}
-
-// updateMappedDirs computes the directory tree for
-// each user-defined file system mapping. If a filter
-// is provided, it is used to filter directories.
-//
-func updateMappedDirs(filter func(string) bool) {
-	if !fsMap.IsEmpty() {
-		fsMap.Iterate(func(path string, value *RWValue) bool {
-			value.set(newDirectory(path, filter, -1))
-			return true
-		})
-		invalidateIndex()
-	}
-}
-
-func updateFilterFile() {
-	updateMappedDirs(nil) // no filter for accuracy
-
-	// collect directory tree leaf node paths
-	var buf bytes.Buffer
-	fsMap.Iterate(func(_ string, value *RWValue) bool {
-		v, _ := value.get()
-		if v != nil && v.(*Directory) != nil {
-			v.(*Directory).writeLeafs(&buf)
-		}
-		return true
-	})
-
-	// update filter file
-	if err := writeFileAtomically(*filter, buf.Bytes()); err != nil {
-		log.Printf("writeFileAtomically(%s): %s", *filter, err)
-		filterDelay.backoff(24 * time.Hour) // back off exponentially, but try at least once a day
-	} else {
-		filterDelay.set(*filterMin) // revert to regular filter update schedule
-	}
-}
-
-func initDirTrees() {
-	// setup initial path filter
-	if *filter != "" {
-		list, err := readDirList(*filter)
-		if err != nil {
-			log.Printf("readDirList(%s): %s", *filter, err)
-		}
-		if *verbose || len(list) == 0 {
-			log.Printf("found %d directory paths in file %s", len(list), *filter)
-		}
-		setPathFilter(list)
-	}
-
-	go updateMappedDirs(getPathFilter()) // use filter for speed
-
-	// start filter update goroutine, if enabled.
-	if *filter != "" && *filterMin > 0 {
-		filterDelay.set(time.Duration(*filterMin) * time.Minute) // initial filter update delay
-		go func() {
-			for {
-				if *verbose {
-					log.Printf("start update of %s", *filter)
-				}
-				updateFilterFile()
-				delay, _ := filterDelay.get()
-				dt := delay.(time.Duration)
-				if *verbose {
-					log.Printf("next filter update in %s", dt)
-				}
-				time.Sleep(dt)
-			}
-		}()
-	}
-}
-
-// ----------------------------------------------------------------------------
-// Path mapping
-
-// Absolute paths are file system paths (backslash-separated on Windows),
-// but relative paths are always slash-separated.
-
-func absolutePath(relpath, defaultRoot string) string {
-	abspath := fsMap.ToAbsolute(relpath)
-	if abspath == "" {
-		// no user-defined mapping found; use default mapping
-		abspath = filepath.Join(defaultRoot, filepath.FromSlash(relpath))
-	}
-	return abspath
-}
-
-func relativeURL(abspath string) string {
-	relpath := fsMap.ToRelative(abspath)
-	if relpath == "" {
-		// prefix must end in a path separator
-		prefix := *goroot
-		if len(prefix) > 0 && prefix[len(prefix)-1] != filepath.Separator {
-			prefix += string(filepath.Separator)
-		}
-		if strings.HasPrefix(abspath, prefix) {
-			// no user-defined mapping found; use default mapping
-			relpath = filepath.ToSlash(abspath[len(prefix):])
-		}
-	}
-	// Only if path is an invalid absolute path is relpath == ""
-	// at this point. This should never happen since absolute paths
-	// are only created via godoc for files that do exist. However,
-	// it is ok to return ""; it will simply provide a link to the
-	// top of the pkg or src directories.
-	return relpath
+	fsTree.set(dir)
+	invalidateIndex()
 }
 
 // ----------------------------------------------------------------------------
@@ -376,11 +208,14 @@ func writeNode(w io.Writer, fset *token.FileSet, x interface{}) {
 	//           with an another printer mode (which is more efficiently
 	//           implemented in the printer than here with another layer)
 	mode := printer.TabIndent | printer.UseSpaces
-	(&printer.Config{mode, *tabwidth}).Fprint(&tconv{output: w}, fset, x)
+	err := (&printer.Config{Mode: mode, Tabwidth: *tabwidth}).Fprint(&tconv{output: w}, fset, x)
+	if err != nil {
+		log.Print(err)
+	}
 }
 
 func filenameFunc(path string) string {
-	_, localname := filepath.Split(path)
+	_, localname := pathpkg.Split(path)
 	return localname
 }
 
@@ -489,12 +324,14 @@ func startsWithUppercase(s string) bool {
 	return unicode.IsUpper(r)
 }
 
+var exampleOutputRx = regexp.MustCompile(`(?i)//[[:space:]]*output:`)
+
 func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.FileSet) string {
 	var buf bytes.Buffer
 	for _, eg := range examples {
 		name := eg.Name
 
-		// strip lowercase braz in Foo_braz or Foo_Bar_braz from name 
+		// strip lowercase braz in Foo_braz or Foo_Bar_braz from name
 		// while keeping uppercase Braz in Foo_Braz
 		if i := strings.LastIndex(name, "_"); i != -1 {
 			if i < len(name)-1 && !startsWithUppercase(name[i+1:]) {
@@ -506,14 +343,29 @@ func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.File
 			continue
 		}
 
-		// print code, unindent and remove surrounding braces
-		code := node_htmlFunc(eg.Body, fset)
-		code = strings.Replace(code, "\n    ", "\n", -1)
-		code = code[2 : len(code)-2]
+		// print code
+		cnode := &printer.CommentedNode{Node: eg.Code, Comments: eg.Comments}
+		code := node_htmlFunc(cnode, fset)
+		out := eg.Output
+
+		// additional formatting if this is a function body
+		if n := len(code); n >= 2 && code[0] == '{' && code[n-1] == '}' {
+			// remove surrounding braces
+			code = code[1 : n-1]
+			// unindent
+			code = strings.Replace(code, "\n    ", "\n", -1)
+			// remove output comment
+			if loc := exampleOutputRx.FindStringIndex(code); loc != nil {
+				code = strings.TrimSpace(code[:loc[0]])
+			}
+		} else {
+			// drop output, as the output comment will appear in the code
+			out = ""
+		}
 
 		err := exampleHTML.Execute(&buf, struct {
-			Code, Output string
-		}{code, eg.Output})
+			Name, Doc, Code, Output string
+		}{eg.Name, eg.Doc, code, out})
 		if err != nil {
 			log.Print(err)
 		}
@@ -521,8 +373,39 @@ func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.File
 	return buf.String()
 }
 
+// example_nameFunc takes an example function name and returns its display
+// name. For example, "Foo_Bar_quux" becomes "Foo.Bar (Quux)".
+func example_nameFunc(s string) string {
+	name, suffix := splitExampleName(s)
+	// replace _ with . for method names
+	name = strings.Replace(name, "_", ".", 1)
+	// use "Package" if no name provided
+	if name == "" {
+		name = "Package"
+	}
+	return name + suffix
+}
+
+// example_suffixFunc takes an example function name and returns its suffix in
+// parenthesized form. For example, "Foo_Bar_quux" becomes " (Quux)".
+func example_suffixFunc(name string) string {
+	_, suffix := splitExampleName(name)
+	return suffix
+}
+
+func splitExampleName(s string) (name, suffix string) {
+	i := strings.LastIndex(s, "_")
+	if 0 <= i && i < len(s)-1 && !startsWithUppercase(s[i+1:]) {
+		name = s[:i]
+		suffix = " (" + strings.Title(s[i+1:]) + ")"
+		return
+	}
+	name = s
+	return
+}
+
 func pkgLinkFunc(path string) string {
-	relpath := relativeURL(path)
+	relpath := path[1:]
 	// because of the irregular mapping under goroot
 	// we need to correct certain relative paths
 	if strings.HasPrefix(relpath, "src/pkg/") {
@@ -538,7 +421,7 @@ func posLink_urlFunc(node ast.Node, fset *token.FileSet) string {
 
 	if p := node.Pos(); p.IsValid() {
 		pos := fset.Position(p)
-		relpath = relativeURL(pos.Filename)
+		relpath = pos.Filename
 		line = pos.Line
 		low = pos.Offset
 	}
@@ -567,6 +450,10 @@ func posLink_urlFunc(node ast.Node, fset *token.FileSet) string {
 	return buf.String()
 }
 
+func srcLinkFunc(s string) string {
+	return pathpkg.Clean("/" + s)
+}
+
 // fmap describes the template functions installed with all godoc templates.
 // Convention: template function names ending in "_html" or "_url" produce
 //             HTML- or URL-escaped strings; all other function results may
@@ -593,23 +480,17 @@ var fmap = template.FuncMap{
 
 	// support for URL attributes
 	"pkgLink":     pkgLinkFunc,
-	"srcLink":     relativeURL,
+	"srcLink":     srcLinkFunc,
 	"posLink_url": posLink_urlFunc,
 
 	// formatting of Examples
-	"example_html": example_htmlFunc,
+	"example_html":   example_htmlFunc,
+	"example_name":   example_nameFunc,
+	"example_suffix": example_suffixFunc,
 }
 
 func readTemplate(name string) *template.Template {
-	path := filepath.Join(*goroot, "lib", "godoc", name)
-	if *templateDir != "" {
-		defaultpath := path
-		path = filepath.Join(*templateDir, name)
-		if _, err := fs.Stat(path); err != nil {
-			log.Print("readTemplate:", err)
-			path = defaultpath
-		}
-	}
+	path := "lib/godoc/" + name
 
 	// use underlying file system fs to read the template file
 	// (cannot use template ParseFile functions directly)
@@ -657,20 +538,23 @@ func readTemplates() {
 // ----------------------------------------------------------------------------
 // Generic HTML wrapper
 
-func servePage(w http.ResponseWriter, title, subtitle, query string, content []byte) {
+func servePage(w http.ResponseWriter, tabtitle, title, subtitle, query string, content []byte) {
+	if tabtitle == "" {
+		tabtitle = title
+	}
 	d := struct {
+		Tabtitle  string
 		Title     string
 		Subtitle  string
-		PkgRoots  []string
 		SearchBox bool
 		Query     string
 		Version   string
 		Menu      []byte
 		Content   []byte
 	}{
+		tabtitle,
 		title,
 		subtitle,
-		fsMap.PrefixList(),
 		*indexEnabled,
 		query,
 		runtime.Version(),
@@ -692,18 +576,10 @@ func serveText(w http.ResponseWriter, text []byte) {
 // Files
 
 var (
-	titleRx        = regexp.MustCompile(`<!-- title ([^\-]*)-->`)
-	subtitleRx     = regexp.MustCompile(`<!-- subtitle ([^\-]*)-->`)
-	firstCommentRx = regexp.MustCompile(`<!--([^\-]*)-->`)
+	doctype   = []byte("<!DOCTYPE ")
+	jsonStart = []byte("<!--{")
+	jsonEnd   = []byte("}-->")
 )
-
-func extractString(src []byte, rx *regexp.Regexp) (s string) {
-	m := rx.FindSubmatch(src)
-	if m != nil {
-		s = strings.TrimSpace(string(m[1]))
-	}
-	return
-}
 
 func serveHTMLDoc(w http.ResponseWriter, r *http.Request, abspath, relpath string) {
 	// get HTML body contents
@@ -716,9 +592,32 @@ func serveHTMLDoc(w http.ResponseWriter, r *http.Request, abspath, relpath strin
 
 	// if it begins with "<!DOCTYPE " assume it is standalone
 	// html that doesn't need the template wrapping.
-	if bytes.HasPrefix(src, []byte("<!DOCTYPE ")) {
+	if bytes.HasPrefix(src, doctype) {
 		w.Write(src)
 		return
+	}
+
+	// if it begins with a JSON blob, read in the metadata.
+	meta, src, err := extractMetadata(src)
+	if err != nil {
+		log.Printf("decoding metadata %s: %v", relpath, err)
+	}
+
+	// evaluate as template if indicated
+	if meta.Template {
+		tmpl, err := template.New("main").Funcs(templateFuncs).Parse(string(src))
+		if err != nil {
+			log.Printf("parsing template %s: %v", relpath, err)
+			serveError(w, r, relpath, err)
+			return
+		}
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, nil); err != nil {
+			log.Printf("executing template %s: %v", relpath, err)
+			serveError(w, r, relpath, err)
+			return
+		}
+		src = buf.Bytes()
 	}
 
 	// if it's the language spec, add tags to EBNF productions
@@ -728,15 +627,7 @@ func serveHTMLDoc(w http.ResponseWriter, r *http.Request, abspath, relpath strin
 		src = buf.Bytes()
 	}
 
-	// get title and subtitle, if any
-	title := extractString(src, titleRx)
-	if title == "" {
-		// no title found; try first comment for backward-compatibility
-		title = extractString(src, firstCommentRx)
-	}
-	subtitle := extractString(src, subtitleRx)
-
-	servePage(w, title, subtitle, "", src)
+	servePage(w, "", meta.Title, meta.Subtitle, "", src)
 }
 
 func applyTemplate(t *template.Template, name string, data interface{}) []byte {
@@ -748,7 +639,11 @@ func applyTemplate(t *template.Template, name string, data interface{}) []byte {
 }
 
 func redirect(w http.ResponseWriter, r *http.Request) (redirected bool) {
-	if canonical := path.Clean(r.URL.Path) + "/"; r.URL.Path != canonical {
+	canonical := pathpkg.Clean(r.URL.Path)
+	if !strings.HasSuffix("/", canonical) {
+		canonical += "/"
+	}
+	if r.URL.Path != canonical {
 		http.Redirect(w, r, canonical, http.StatusMovedPermanently)
 		redirected = true
 	}
@@ -765,10 +660,10 @@ func serveTextFile(w http.ResponseWriter, r *http.Request, abspath, relpath, tit
 
 	var buf bytes.Buffer
 	buf.WriteString("<pre>")
-	FormatText(&buf, src, 1, filepath.Ext(abspath) == ".go", r.FormValue("h"), rangeSelection(r.FormValue("s")))
+	FormatText(&buf, src, 1, pathpkg.Ext(abspath) == ".go", r.FormValue("h"), rangeSelection(r.FormValue("s")))
 	buf.WriteString("</pre>")
 
-	servePage(w, title+" "+relpath, "", "", buf.Bytes())
+	servePage(w, relpath, title+" "+relpath, "", "", buf.Bytes())
 }
 
 func serveDirectory(w http.ResponseWriter, r *http.Request, abspath, relpath string) {
@@ -778,32 +673,32 @@ func serveDirectory(w http.ResponseWriter, r *http.Request, abspath, relpath str
 
 	list, err := fs.ReadDir(abspath)
 	if err != nil {
-		log.Printf("ReadDir: %s", err)
 		serveError(w, r, relpath, err)
 		return
 	}
 
 	contents := applyTemplate(dirlistHTML, "dirlistHTML", list)
-	servePage(w, "Directory "+relpath, "", "", contents)
+	servePage(w, relpath, "Directory "+relpath, "", "", contents)
 }
 
 func serveFile(w http.ResponseWriter, r *http.Request) {
-	relpath := r.URL.Path[1:] // serveFile URL paths start with '/'
-	abspath := absolutePath(relpath, *goroot)
+	relpath := r.URL.Path
 
-	// pick off special cases and hand the rest to the standard file server
-	switch r.URL.Path {
-	case "/":
-		serveHTMLDoc(w, r, filepath.Join(*goroot, "doc", "root.html"), "doc/root.html")
-		return
-
-	case "/doc/root.html":
-		// hide landing page from its real name
-		http.Redirect(w, r, "/", http.StatusMovedPermanently)
-		return
+	// Check to see if we need to redirect or serve another file.
+	if m := metadataFor(relpath); m != nil {
+		if m.Path != relpath {
+			// Redirect to canonical path.
+			http.Redirect(w, r, m.Path, http.StatusMovedPermanently)
+			return
+		}
+		// Serve from the actual filesystem path.
+		relpath = m.filePath
 	}
 
-	switch path.Ext(relpath) {
+	abspath := relpath
+	relpath = relpath[1:] // strip leading slash
+
+	switch pathpkg.Ext(relpath) {
 	case ".html":
 		if strings.HasSuffix(relpath, "/index.html") {
 			// We'll show index.html for the directory.
@@ -830,8 +725,8 @@ func serveFile(w http.ResponseWriter, r *http.Request) {
 		if redirect(w, r) {
 			return
 		}
-		if index := filepath.Join(abspath, "index.html"); isTextFile(index) {
-			serveHTMLDoc(w, r, index, relativeURL(index))
+		if index := pathpkg.Join(abspath, "index.html"); isTextFile(index) {
+			serveHTMLDoc(w, r, index, index)
 			return
 		}
 		serveDirectory(w, r, abspath, relpath)
@@ -871,6 +766,7 @@ type PageInfoMode uint
 
 const (
 	noFiltering PageInfoMode = 1 << iota // do not filter exports
+	allMethods                           // show all embedded methods
 	showSource                           // show source code, do not extract documentation
 	noHtml                               // show result in textual form, do not generate HTML
 	flatDir                              // show directory in a flat (non-indented) manner
@@ -878,10 +774,11 @@ const (
 
 // modeNames defines names for each PageInfoMode flag.
 var modeNames = map[string]PageInfoMode{
-	"all":  noFiltering,
-	"src":  showSource,
-	"text": noHtml,
-	"flat": flatDir,
+	"all":     noFiltering,
+	"methods": allMethods,
+	"src":     showSource,
+	"text":    noHtml,
+	"flat":    flatDir,
 }
 
 // getPageInfoMode computes the PageInfoMode flags by analyzing the request
@@ -917,24 +814,24 @@ func remoteSearchURL(query string, html bool) string {
 }
 
 type PageInfo struct {
-	Dirname  string          // directory containing the package
-	PList    []string        // list of package names found
-	FSet     *token.FileSet  // corresponding file set
-	PAst     *ast.File       // nil if no single AST with package exports
-	PDoc     *doc.PackageDoc // nil if no single package documentation
-	Examples []*doc.Example  // nil if no example code
-	Dirs     *DirList        // nil if no directory information
-	DirTime  time.Time       // directory time stamp
-	DirFlat  bool            // if set, show directory in a flat (non-indented) manner
-	IsPkg    bool            // false if this is not documenting a real package
-	Err      error           // I/O error or nil
+	Dirname  string         // directory containing the package
+	PList    []string       // list of package names found
+	FSet     *token.FileSet // corresponding file set
+	PAst     *ast.File      // nil if no single AST with package exports
+	PDoc     *doc.Package   // nil if no single package documentation
+	Examples []*doc.Example // nil if no example code
+	Dirs     *DirList       // nil if no directory information
+	DirTime  time.Time      // directory time stamp
+	DirFlat  bool           // if set, show directory in a flat (non-indented) manner
+	IsPkg    bool           // false if this is not documenting a real package
+	Err      error          // I/O error or nil
 }
 
 func (info *PageInfo) IsEmpty() bool {
 	return info.Err != nil || info.PAst == nil && info.PDoc == nil && info.Dirs == nil
 }
 
-type httpHandler struct {
+type docServer struct {
 	pattern string // url pattern; e.g. "/pkg/"
 	fsRoot  string // file system root to which the pattern is mapped
 	isPkg   bool   // true if this handler serves real package documentation (as opposed to command documentation)
@@ -945,11 +842,13 @@ func fsReadDir(dir string) ([]os.FileInfo, error) {
 	return fs.ReadDir(dir)
 }
 
-// fsReadFile implements ReadFile for the go/build package.
-func fsReadFile(dir, name string) (path string, data []byte, err error) {
-	path = filepath.Join(dir, name)
-	data, err = ReadFile(fs, path)
-	return
+// fsOpenFile implements OpenFile for the go/build package.
+func fsOpenFile(name string) (r io.ReadCloser, err error) {
+	data, err := ReadFile(fs, name)
+	if err != nil {
+		return nil, err
+	}
+	return ioutil.NopCloser(bytes.NewReader(data)), nil
 }
 
 func inList(name string, list []string) bool {
@@ -969,7 +868,7 @@ func inList(name string, list []string) bool {
 // directories, PageInfo.Dirs is nil. If a directory read error occurred,
 // PageInfo.Err is set to the respective error but the error is not logged.
 //
-func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInfoMode) PageInfo {
+func (h *docServer) getPageInfo(abspath, relpath, pkgname string, mode PageInfoMode) PageInfo {
 	var pkgFiles []string
 
 	// If we're showing the default package, restrict to the ones
@@ -982,10 +881,11 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		// To use different pair, such as if we allowed the user
 		// to choose, set ctxt.GOOS and ctxt.GOARCH before
 		// calling ctxt.ScanDir.
-		ctxt := build.DefaultContext
+		ctxt := build.Default
+		ctxt.IsAbsPath = pathpkg.IsAbs
 		ctxt.ReadDir = fsReadDir
-		ctxt.ReadFile = fsReadFile
-		dir, err := ctxt.ScanDir(abspath)
+		ctxt.OpenFile = fsOpenFile
+		dir, err := ctxt.ImportDir(abspath, 0)
 		if err == nil {
 			pkgFiles = append(dir.GoFiles, dir.CgoFiles...)
 		}
@@ -1030,13 +930,13 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		// the package with dirname, and the 3rd choice is a package
 		// that is not called "main" if there is exactly one such
 		// package. Otherwise, don't select a package.
-		dirpath, dirname := filepath.Split(abspath)
+		dirpath, dirname := pathpkg.Split(abspath)
 
 		// If the dirname is "go" we might be in a sub-directory for
 		// .go files - use the outer directory name instead for better
 		// results.
 		if dirname == "go" {
-			_, dirname = filepath.Split(filepath.Clean(dirpath))
+			_, dirname = pathpkg.Split(pathpkg.Clean(dirpath))
 		}
 
 		var choice3 *ast.Package
@@ -1067,6 +967,7 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 			}
 		}
 		plist = plist[0:i]
+		sort.Strings(plist)
 	}
 
 	// get examples from *_test.go files
@@ -1078,23 +979,33 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		log.Println("parsing test files:", err)
 	} else {
 		for _, testpkg := range testpkgs {
-			examples = append(examples, doc.Examples(testpkg)...)
+			var files []*ast.File
+			for _, f := range testpkg.Files {
+				files = append(files, f)
+			}
+			examples = append(examples, doc.Examples(files...)...)
 		}
 	}
 
 	// compute package documentation
 	var past *ast.File
-	var pdoc *doc.PackageDoc
+	var pdoc *doc.Package
 	if pkg != nil {
-		exportsOnly := mode&noFiltering == 0
 		if mode&showSource == 0 {
 			// show extracted documentation
-			pdoc = doc.NewPackageDoc(pkg, path.Clean(relpath), exportsOnly) // no trailing '/' in importpath
+			var m doc.Mode
+			if mode&noFiltering != 0 {
+				m = doc.AllDecls
+			}
+			if mode&allMethods != 0 {
+				m |= doc.AllMethods
+			}
+			pdoc = doc.New(pkg, pathpkg.Clean(relpath), m) // no trailing '/' in importpath
 		} else {
 			// show source code
 			// TODO(gri) Consider eliminating export filtering in this mode,
 			//           or perhaps eliminating the mode altogether.
-			if exportsOnly {
+			if mode&noFiltering == 0 {
 				ast.PackageExports(pkg)
 			}
 			past = ast.MergePackageFiles(pkg, ast.FilterUnassociatedComments)
@@ -1112,34 +1023,11 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		timestamp = ts
 	}
 	if dir == nil {
-		// the path may refer to a user-specified file system mapped
-		// via fsMap; lookup that mapping and corresponding RWValue
-		// if any
-		var v *RWValue
-		fsMap.Iterate(func(path string, value *RWValue) bool {
-			if isParentOf(path, abspath) {
-				// mapping found
-				v = value
-				return false
-			}
-			return true
-		})
-		if v != nil {
-			// found a RWValue associated with a user-specified file
-			// system; a non-nil RWValue stores a (possibly out-of-date)
-			// directory tree for that file system
-			if tree, ts := v.get(); tree != nil && tree.(*Directory) != nil {
-				dir = tree.(*Directory).lookup(abspath)
-				timestamp = ts
-			}
-		}
-	}
-	if dir == nil {
 		// no directory tree present (too early after startup or
 		// command-line mode); compute one level for this page
 		// note: cannot use path filter here because in general
 		//       it doesn't contain the fsTree path
-		dir = newDirectory(abspath, nil, 1)
+		dir = newDirectory(abspath, 1)
 		timestamp = time.Now()
 	}
 
@@ -1158,13 +1046,13 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 	}
 }
 
-func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *docServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if redirect(w, r) {
 		return
 	}
 
-	relpath := path.Clean(r.URL.Path[len(h.pattern):])
-	abspath := absolutePath(relpath, h.fsRoot)
+	relpath := pathpkg.Clean(r.URL.Path[len(h.pattern):])
+	abspath := pathpkg.Join(h.fsRoot, relpath)
 	mode := getPageInfoMode(r)
 	if relpath == builtinPkgPath {
 		mode = noFiltering
@@ -1182,30 +1070,41 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var title, subtitle string
+	var tabtitle, title, subtitle string
 	switch {
 	case info.PAst != nil:
-		title = "Package " + info.PAst.Name.Name
+		tabtitle = info.PAst.Name.Name
+		title = "Package " + tabtitle
 	case info.PDoc != nil:
-		switch {
-		case info.IsPkg:
-			title = "Package " + info.PDoc.PackageName
-		case info.PDoc.PackageName == fakePkgName:
+		if info.PDoc.Name == fakePkgName {
 			// assume that the directory name is the command name
-			_, pkgname := path.Split(relpath)
-			title = "Command " + pkgname
-		default:
-			title = "Command " + info.PDoc.PackageName
+			_, tabtitle = pathpkg.Split(relpath)
+		} else {
+			tabtitle = info.PDoc.Name
+		}
+		if info.IsPkg {
+			title = "Package " + tabtitle
+		} else {
+			title = "Command " + tabtitle
 		}
 	default:
-		title = "Directory " + relativeURL(info.Dirname)
+		tabtitle = info.Dirname
+		title = "Directory " + tabtitle
 		if *showTimestamps {
 			subtitle = "Last update: " + info.DirTime.String()
 		}
 	}
 
+	// special cases for top-level package/command directories
+	switch tabtitle {
+	case "/src/pkg":
+		tabtitle = "Packages"
+	case "/src/cmd":
+		tabtitle = "Commands"
+	}
+
 	contents := applyTemplate(packageHTML, "packageHTML", info)
-	servePage(w, title, subtitle, "", contents)
+	servePage(w, tabtitle, title, subtitle, "", contents)
 }
 
 // ----------------------------------------------------------------------------
@@ -1295,7 +1194,133 @@ func search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contents := applyTemplate(searchHTML, "searchHTML", result)
-	servePage(w, title, "", query, contents)
+	servePage(w, query, title, "", query, contents)
+}
+
+// ----------------------------------------------------------------------------
+// Documentation Metadata
+
+type Metadata struct {
+	Title    string
+	Subtitle string
+	Template bool   // execute as template
+	Path     string // canonical path for this page
+	filePath string // filesystem path relative to goroot
+}
+
+// extractMetadata extracts the Metadata from a byte slice.
+// It returns the Metadata value and the remaining data.
+// If no metadata is present the original byte slice is returned.
+//
+func extractMetadata(b []byte) (meta Metadata, tail []byte, err error) {
+	tail = b
+	if !bytes.HasPrefix(b, jsonStart) {
+		return
+	}
+	end := bytes.Index(b, jsonEnd)
+	if end < 0 {
+		return
+	}
+	b = b[len(jsonStart)-1 : end+1] // drop leading <!-- and include trailing }
+	if err = json.Unmarshal(b, &meta); err != nil {
+		return
+	}
+	tail = tail[end+len(jsonEnd):]
+	return
+}
+
+// updateMetadata scans $GOROOT/doc for HTML files, reads their metadata,
+// and updates the docMetadata map.
+//
+func updateMetadata() {
+	metadata := make(map[string]*Metadata)
+	var scan func(string) // scan is recursive
+	scan = func(dir string) {
+		fis, err := fs.ReadDir(dir)
+		if err != nil {
+			log.Println("updateMetadata:", err)
+			return
+		}
+		for _, fi := range fis {
+			name := pathpkg.Join(dir, fi.Name())
+			if fi.IsDir() {
+				scan(name) // recurse
+				continue
+			}
+			if !strings.HasSuffix(name, ".html") {
+				continue
+			}
+			// Extract metadata from the file.
+			b, err := ReadFile(fs, name)
+			if err != nil {
+				log.Printf("updateMetadata %s: %v", name, err)
+				continue
+			}
+			meta, _, err := extractMetadata(b)
+			if err != nil {
+				log.Printf("updateMetadata: %s: %v", name, err)
+				continue
+			}
+			// Store relative filesystem path in Metadata.
+			meta.filePath = name
+			if meta.Path == "" {
+				// If no Path, canonical path is actual path.
+				meta.Path = meta.filePath
+			}
+			// Store under both paths.
+			metadata[meta.Path] = &meta
+			metadata[meta.filePath] = &meta
+		}
+	}
+	scan("/doc")
+	docMetadata.set(metadata)
+}
+
+// Send a value on this channel to trigger a metadata refresh.
+// It is buffered so that if a signal is not lost if sent during a refresh.
+//
+var refreshMetadataSignal = make(chan bool, 1)
+
+// refreshMetadata sends a signal to update docMetadata. If a refresh is in
+// progress the metadata will be refreshed again afterward.
+//
+func refreshMetadata() {
+	select {
+	case refreshMetadataSignal <- true:
+	default:
+	}
+}
+
+// refreshMetadataLoop runs forever, updating docMetadata when the underlying
+// file system changes. It should be launched in a goroutine by main.
+//
+func refreshMetadataLoop() {
+	for {
+		<-refreshMetadataSignal
+		updateMetadata()
+		time.Sleep(10 * time.Second) // at most once every 10 seconds
+	}
+}
+
+// metadataFor returns the *Metadata for a given relative path or nil if none
+// exists.
+//
+func metadataFor(relpath string) *Metadata {
+	if m, _ := docMetadata.get(); m != nil {
+		meta := m.(map[string]*Metadata)
+		// If metadata for this relpath exists, return it.
+		if p := meta[relpath]; p != nil {
+			return p
+		}
+		// Try with or without trailing slash.
+		if strings.HasSuffix(relpath, "/") {
+			relpath = relpath[:len(relpath)-1]
+		} else {
+			relpath = relpath + "/"
+		}
+		return meta[relpath]
+	}
+	return nil
 }
 
 // ----------------------------------------------------------------------------
@@ -1306,6 +1331,7 @@ func search(w http.ResponseWriter, r *http.Request) {
 //
 func invalidateIndex() {
 	fsModified.set(nil)
+	refreshMetadata()
 }
 
 // indexUpToDate() returns true if the search index is not older
@@ -1332,13 +1358,9 @@ func feedDirnames(root *RWValue, c chan<- string) {
 // of all the file systems under godoc's observation.
 //
 func fsDirnames() <-chan string {
-	c := make(chan string, 256) // asynchronous for fewer context switches
+	c := make(chan string, 256) // buffered for fewer context switches
 	go func() {
 		feedDirnames(&fsTree, c)
-		fsMap.Iterate(func(_ string, root *RWValue) bool {
-			feedDirnames(root, c)
-			return true
-		})
 		close(c)
 	}()
 	return c
@@ -1381,9 +1403,12 @@ func updateIndex() {
 		log.Printf("index updated (%gs, %d bytes of source, %d files, %d lines, %d unique words, %d spots)",
 			secs, stats.Bytes, stats.Files, stats.Lines, stats.Words, stats.Spots)
 	}
-	log.Printf("before GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+	memstats := new(runtime.MemStats)
+	runtime.ReadMemStats(memstats)
+	log.Printf("before GC: bytes = %d footprint = %d", memstats.HeapAlloc, memstats.Sys)
 	runtime.GC()
-	log.Printf("after  GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+	runtime.ReadMemStats(memstats)
+	log.Printf("after  GC: bytes = %d footprint = %d", memstats.HeapAlloc, memstats.Sys)
 }
 
 func indexer() {

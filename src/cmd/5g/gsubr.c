@@ -75,6 +75,7 @@ prog(int as)
 		p = dpc;
 		dpc = mal(sizeof(*dpc));
 		p->link = dpc;
+		p->reg = 0;  // used for flags
 	} else {
 		p = pc;
 		pc = mal(sizeof(*pc));
@@ -253,6 +254,10 @@ ggloblnod(Node *nam, int32 width)
 	p->to.sym = S;
 	p->to.type = D_CONST;
 	p->to.offset = width;
+	if(nam->readonly)
+		p->reg = RODATA;
+	if(nam->type != T && !haspointers(nam->type))
+		p->reg |= NOPTR;
 }
 
 void
@@ -269,6 +274,7 @@ ggloblsym(Sym *s, int32 width, int dupok)
 	p->to.offset = width;
 	if(dupok)
 		p->reg = DUPOK;
+	p->reg |= RODATA;
 }
 
 int
@@ -346,6 +352,8 @@ anyregalloc(void)
 	return 0;
 }
 
+uintptr regpc[REGALLOC_FMAX+1];
+
 /*
  * allocate register of type t, leave in n.
  * if o != N, o is desired fixed register.
@@ -389,9 +397,12 @@ regalloc(Node *n, Type *t, Node *o)
 				goto out;
 		}
 		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
-			if(reg[i] == 0)
+			if(reg[i] == 0) {
+				regpc[i] = (uintptr)getcallerpc(&n);
 				goto out;
-
+			}
+		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
+			print("%d %p\n", i, regpc[i]);
 		yyerror("out of fixed registers");
 		goto err;
 
@@ -446,11 +457,13 @@ regfree(Node *n)
 	if(n->op != OREGISTER && n->op != OINDREG)
 		fatal("regfree: not a register");
 	i = n->val.u.reg;
-	if(i < 0 || i >= sizeof(reg))
+	if(i < 0 || i >= nelem(reg) || i >= nelem(regpc))
 		fatal("regfree: reg out of range");
 	if(reg[i] <= 0)
 		fatal("regfree: reg not allocated");
 	reg[i]--;
+	if(reg[i] == 0)
+		regpc[i] = 0;
 }
 
 /*
@@ -1104,7 +1117,8 @@ gins(int as, Node *f, Node *t)
 	if(f != N)
 		naddr(f, &af, 1);
 	if(t != N)
-		naddr(t, &at, 1);	p = prog(as);
+		naddr(t, &at, 1);
+	p = prog(as);
 	if(f != N)
 		p->from = af;
 	if(t != N)
@@ -1345,6 +1359,16 @@ naddr(Node *n, Addr *a, int canemitcode)
 			a->offset = 0;
 			break;
 		}
+		break;
+
+	case OITAB:
+		// itable of interface value
+		naddr(n->left, a, canemitcode);
+		a->etype = TINT32;
+		if(a->type == D_CONST && a->offset == 0)
+			break;	// len(nil)
+		if(a->offset >= unmappedzero && a->offset-Array_nel < unmappedzero)
+			checkoffset(a, canemitcode);
 		break;
 
 	case OLEN:

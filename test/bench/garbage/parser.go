@@ -24,15 +24,15 @@ import (
 
 var serve = flag.String("serve", "", "serve http on this address at end")
 
-func isGoFile(dir *os.FileInfo) bool {
-	return dir.IsRegular() &&
-		!strings.HasPrefix(dir.Name, ".") && // ignore .files
-		path.Ext(dir.Name) == ".go"
+func isGoFile(dir os.FileInfo) bool {
+	return !dir.IsDir() &&
+		!strings.HasPrefix(dir.Name(), ".") && // ignore .files
+		path.Ext(dir.Name()) == ".go"
 }
 
-func isPkgFile(dir *os.FileInfo) bool {
+func isPkgFile(dir os.FileInfo) bool {
 	return isGoFile(dir) &&
-		!strings.HasSuffix(dir.Name, "_test.go") // ignore test files
+		!strings.HasSuffix(dir.Name(), "_test.go") // ignore test files
 }
 
 func pkgName(filename string) string {
@@ -49,7 +49,7 @@ func parseDir(dirpath string) map[string]*ast.Package {
 	_, pkgname := path.Split(dirpath)
 
 	// filter function to select the desired .go files
-	filter := func(d *os.FileInfo) bool {
+	filter := func(d os.FileInfo) bool {
 		if isPkgFile(d) {
 			// Some directories contain main packages: Only accept
 			// files that belong to the expected package so that
@@ -57,7 +57,7 @@ func parseDir(dirpath string) map[string]*ast.Package {
 			// found" errors.
 			// Additionally, accept the special package name
 			// fakePkgName if we are looking at cmd documentation.
-			name := pkgName(dirpath + "/" + d.Name)
+			name := pkgName(dirpath + "/" + d.Name())
 			return name == pkgname
 		}
 		return false
@@ -73,7 +73,7 @@ func parseDir(dirpath string) map[string]*ast.Package {
 }
 
 func main() {
-	st := &runtime.MemStats
+	st := new(runtime.MemStats)
 	packages = append(packages, packages...)
 	packages = append(packages, packages...)
 	n := flag.Int("n", 4, "iterations")
@@ -82,16 +82,19 @@ func main() {
 	flag.Parse()
 
 	var lastParsed []map[string]*ast.Package
-	var t0 int64
+	var t0 time.Time
+	var numGC uint32
+	var pauseTotalNs uint64
 	pkgroot := runtime.GOROOT() + "/src/pkg/"
 	for pass := 0; pass < 2; pass++ {
 		// Once the heap is grown to full size, reset counters.
 		// This hides the start-up pauses, which are much smaller
 		// than the normal pauses and would otherwise make
 		// the average look much better than it actually is.
-		st.NumGC = 0
-		st.PauseTotalNs = 0
-		t0 = time.Nanoseconds()
+		runtime.ReadMemStats(st)
+		numGC = st.NumGC
+		pauseTotalNs = st.PauseTotalNs
+		t0 = time.Now()
 
 		for i := 0; i < *n; i++ {
 			parsed := make([]map[string]*ast.Package, *p)
@@ -105,8 +108,11 @@ func main() {
 		runtime.GC()
 		runtime.GC()
 	}
-	t1 := time.Nanoseconds()
+	t1 := time.Now()
 
+	runtime.ReadMemStats(st)
+	st.NumGC -= numGC
+	st.PauseTotalNs -= pauseTotalNs
 	fmt.Printf("Alloc=%d/%d Heap=%d Mallocs=%d PauseTime=%.3f/%d = %.3f\n",
 		st.Alloc, st.TotalAlloc,
 		st.Sys,
@@ -120,7 +126,7 @@ func main() {
 		}
 	*/
 	// Standard gotest benchmark output, collected by build dashboard.
-	gcstats("BenchmarkParser", *n, t1-t0)
+	gcstats("BenchmarkParser", *n, t1.Sub(t0))
 
 	if *serve != "" {
 		log.Fatal(http.ListenAndServe(*serve, nil))
@@ -130,22 +136,19 @@ func main() {
 
 var packages = []string{
 	"archive/tar",
-	"asn1",
-	"big",
+	"encoding/asn1",
+	"math/big",
 	"bufio",
 	"bytes",
-	"cmath",
+	"math/cmplx",
 	"compress/flate",
 	"compress/gzip",
 	"compress/zlib",
 	"container/heap",
 	"container/list",
 	"container/ring",
-	"container/vector",
 	"crypto/aes",
-	"crypto/blowfish",
 	"crypto/hmac",
-	"crypto/md4",
 	"crypto/md5",
 	"crypto/rand",
 	"crypto/rc4",
@@ -156,21 +159,17 @@ var packages = []string{
 	"crypto/subtle",
 	"crypto/tls",
 	"crypto/x509",
-	"crypto/xtea",
 	"debug/dwarf",
 	"debug/macho",
 	"debug/elf",
 	"debug/gosym",
-	"ebnf",
+	"exp/ebnf",
 	"encoding/ascii85",
 	"encoding/base64",
 	"encoding/binary",
-	"encoding/git85",
 	"encoding/hex",
 	"encoding/pem",
-	"exec",
-	"exp/datafmt",
-	"expvar",
+	"os/exec",
 	"flag",
 	"fmt",
 	"go/ast",
@@ -179,49 +178,47 @@ var packages = []string{
 	"go/printer",
 	"go/scanner",
 	"go/token",
-	"gob",
+	"encoding/gob",
 	"hash",
 	"hash/adler32",
 	"hash/crc32",
 	"hash/crc64",
-	"http",
+	"net/http",
 	"image",
 	"image/jpeg",
 	"image/png",
 	"io",
 	"io/ioutil",
-	"json",
+	"encoding/json",
 	"log",
 	"math",
 	"mime",
 	"net",
 	"os",
-	"os/signal",
-	"patch",
+	"exp/signal",
 	"path",
-	"rand",
+	"math/rand",
 	"reflect",
 	"regexp",
-	"rpc",
+	"net/rpc",
 	"runtime",
-	"scanner",
+	"text/scanner",
 	"sort",
-	"smtp",
+	"net/smtp",
 	"strconv",
 	"strings",
 	"sync",
 	"syscall",
-	"syslog",
-	"tabwriter",
-	"template",
+	"log/syslog",
+	"text/tabwriter",
+	"text/template",
 	"testing",
 	"testing/iotest",
 	"testing/quick",
 	"testing/script",
 	"time",
 	"unicode",
-	"utf8",
-	"utf16",
-	"websocket",
-	"xml",
+	"unicode/utf8",
+	"unicode/utf16",
+	"encoding/xml",
 }

@@ -707,6 +707,8 @@ Optab optab[] =
 	{ ACMPXCHGW,	yrl_ml,	Pm, 0xb1 },
 	{ ACMPXCHG8B,	yscond,	Pm, 0xc7,(01) },
 
+	{ ARDTSC,	ynone,	Pm, 0x31 },
+
 	{ AXADDB,	yrb_mb,	Pb, 0x0f,0xc0 },
 	{ AXADDL,	yrl_ml,	Pm, 0xc1 },
 	{ AXADDW,	yrl_ml,	Pe, 0x0f,0xc1 },
@@ -752,6 +754,12 @@ Optab optab[] =
 	{ AFCMOVNE,	yfcmv,	Px, 0xdb,(01) },
 	{ AFCMOVNU,	yfcmv,	Px, 0xdb,(03) },
 	{ AFCMOVUN,	yfcmv,	Px, 0xda,(03) },
+
+	{ ALFENCE, ynone, Pm, 0xae,0xe8 },
+	{ AMFENCE, ynone, Pm, 0xae,0xf0 },
+	{ ASFENCE, ynone, Pm, 0xae,0xf8 },
+
+	{ AEMMS, ynone, Pm, 0x77 },
 
 	0
 };

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build ignore
+
 // Unicode table generator.
 // Data read from the web.
 
@@ -417,7 +419,7 @@ func printCategories() {
 	fmt.Printf("const Version = %q\n\n", version())
 
 	if *tablelist == "all" {
-		fmt.Println("// Categories is the set of Unicode data tables.")
+		fmt.Println("// Categories is the set of Unicode category tables.")
 		fmt.Println("var Categories = map[string] *RangeTable {")
 		for _, k := range allCategories() {
 			fmt.Printf("\t%q: %s,\n", k, k)
@@ -486,6 +488,7 @@ func printCategories() {
 			func(code rune) bool { return chars[code].category == name })
 	}
 	decl.Sort()
+	fmt.Println("// The following variables are of type *RangeTable:")
 	fmt.Println("var (")
 	for _, d := range decl {
 		fmt.Print(d)
@@ -652,7 +655,11 @@ func foldAdjacent(r []Script) []unicode.Range32 {
 			s[j-1].Hi = r[i].hi
 		} else {
 			s = s[0 : j+1]
-			s[j] = unicode.Range32{uint32(r[i].lo), uint32(r[i].hi), 1}
+			s[j] = unicode.Range32{
+				Lo:     uint32(r[i].lo),
+				Hi:     uint32(r[i].hi),
+				Stride: 1,
+			}
 			j++
 		}
 	}
@@ -764,6 +771,7 @@ func printScriptOrProperty(doProps bool) {
 		fmt.Print("}\n\n")
 	}
 	decl.Sort()
+	fmt.Println("// The following variables are of type *RangeTable:")
 	fmt.Println("var (")
 	for _, d := range decl {
 		fmt.Print(d)

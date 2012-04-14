@@ -31,7 +31,7 @@ import (
 // Handler for /doc/codewalk/ and below.
 func codewalk(w http.ResponseWriter, r *http.Request) {
 	relpath := r.URL.Path[len("/doc/codewalk/"):]
-	abspath := absolutePath(r.URL.Path[1:], *goroot)
+	abspath := r.URL.Path
 
 	r.ParseForm()
 	if f := r.FormValue("fileprint"); f != "" {
@@ -53,7 +53,9 @@ func codewalk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Otherwise append .xml and hope to find
-	// a codewalk description.
+	// a codewalk description, but before trim
+	// the trailing /.
+	abspath = strings.TrimRight(abspath, "/")
 	cw, err := loadCodewalk(abspath + ".xml")
 	if err != nil {
 		log.Print(err)
@@ -67,22 +69,22 @@ func codewalk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b := applyTemplate(codewalkHTML, "codewalk", cw)
-	servePage(w, "Codewalk: "+cw.Title, "", "", b)
+	servePage(w, cw.Title, "Codewalk: "+cw.Title, "", "", b)
 }
 
 // A Codewalk represents a single codewalk read from an XML file.
 type Codewalk struct {
-	Title string `xml:"attr"`
-	File  []string
-	Step  []*Codestep
+	Title string      `xml:"title,attr"`
+	File  []string    `xml:"file"`
+	Step  []*Codestep `xml:"step"`
 }
 
 // A Codestep is a single step in a codewalk.
 type Codestep struct {
 	// Filled in from XML
-	Src   string `xml:"attr"`
-	Title string `xml:"attr"`
-	XML   string `xml:"innerxml"`
+	Src   string `xml:"src,attr"`
+	Title string `xml:"title,attr"`
+	XML   string `xml:",innerxml"`
 
 	// Derived from Src; not in XML.
 	Err    error
@@ -115,11 +117,11 @@ func loadCodewalk(filename string) (*Codewalk, error) {
 	}
 	defer f.Close()
 	cw := new(Codewalk)
-	p := xml.NewParser(f)
-	p.Entity = xml.HTMLEntity
-	err = p.Unmarshal(cw, nil)
+	d := xml.NewDecoder(f)
+	d.Entity = xml.HTMLEntity
+	err = d.Decode(cw)
 	if err != nil {
-		return nil, &os.PathError{"parsing", filename, err}
+		return nil, &os.PathError{Op: "parsing", Path: filename, Err: err}
 	}
 
 	// Compute file list, evaluate line numbers for addresses.
@@ -130,7 +132,7 @@ func loadCodewalk(filename string) (*Codewalk, error) {
 			i = len(st.Src)
 		}
 		filename := st.Src[0:i]
-		data, err := ReadFile(fs, absolutePath(filename, *goroot))
+		data, err := ReadFile(fs, filename)
 		if err != nil {
 			st.Err = err
 			continue
@@ -198,7 +200,7 @@ func codewalkDir(w http.ResponseWriter, r *http.Request, relpath, abspath string
 	}
 
 	b := applyTemplate(codewalkdirHTML, "codewalkdir", v)
-	servePage(w, "Codewalks", "", "", b)
+	servePage(w, "", "Codewalks", "", "", b)
 }
 
 // codewalkFileprint serves requests with ?fileprint=f&lo=lo&hi=hi.
@@ -208,7 +210,7 @@ func codewalkDir(w http.ResponseWriter, r *http.Request, relpath, abspath string
 // of the codewalk pages.  It is a separate iframe and does not get
 // the usual godoc HTML wrapper.
 func codewalkFileprint(w http.ResponseWriter, r *http.Request, f string) {
-	abspath := absolutePath(f, *goroot)
+	abspath := f
 	data, err := ReadFile(fs, abspath)
 	if err != nil {
 		log.Print(err)

@@ -45,18 +45,23 @@ TEXT runtime·thr_start(SB),7,$0
 TEXT runtime·exit(SB),7,$-4
 	MOVL	$1, AX
 	INT	$0x80
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·exit1(SB),7,$-4
 	MOVL	$431, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·write(SB),7,$-4
 	MOVL	$4, AX
+	INT	$0x80
+	RET
+
+TEXT runtime·getrlimit(SB),7,$-4
+	MOVL	$194, AX
 	INT	$0x80
 	RET
 
@@ -72,10 +77,6 @@ TEXT runtime·raisesigpipe(SB),7,$12
 	MOVL	$13, 4(SP)
 	MOVL	$433, AX
 	INT	$0x80
-	RET
-
-TEXT runtime·notok(SB),7,$0
-	MOVL	$0xf1, 0xf1
 	RET
 
 TEXT runtime·mmap(SB),7,$32
@@ -98,7 +99,7 @@ TEXT runtime·munmap(SB),7,$-4
 	MOVL	$73, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·setitimer(SB), 7, $-4
@@ -152,18 +153,23 @@ TEXT runtime·sigaction(SB),7,$-4
 	MOVL	$416, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigtramp(SB),7,$44
 	get_tls(CX)
+
+	// check that m exists
+	MOVL	m(CX), BX
+	CMPL	BX, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
 
 	// save g
 	MOVL	g(CX), DI
 	MOVL	DI, 20(SP)
 	
 	// g = m->gsignal
-	MOVL	m(CX), BX
 	MOVL	m_gsignal(BX), BX
 	MOVL	BX, g(CX)
 
@@ -189,18 +195,32 @@ TEXT runtime·sigtramp(SB),7,$44
 	MOVL	AX, 4(SP)
 	MOVL	$417, AX	// sigreturn(ucontext)
 	INT	$0x80
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigaltstack(SB),7,$0
 	MOVL	$53, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-// TODO: Implement usleep
-TEXT runtime·usleep(SB),7,$0
+TEXT runtime·usleep(SB),7,$20
+	MOVL	$0, DX
+	MOVL	usec+0(FP), AX
+	MOVL	$1000000, CX
+	DIVL	CX
+	MOVL	AX, 12(SP)		// tv_sec
+	MOVL	$1000, AX
+	MULL	DX
+	MOVL	AX, 16(SP)		// tv_nsec
+
+	MOVL	$0, 0(SP)
+	LEAL	12(SP), AX
+	MOVL	AX, 4(SP)		// arg 1 - rqtp
+	MOVL	$0, 8(SP)		// arg 2 - rmtp
+	MOVL	$240, AX		// sys_nanosleep
+	INT	$0x80
 	RET
 
 /*
@@ -222,7 +242,7 @@ int i386_set_ldt(int, const union ldt_entry *, int);
 // setldt(int entry, int address, int limit)
 TEXT runtime·setldt(SB),7,$32
 	MOVL	address+4(FP), BX	// aka base
-	// see comment in linux/386/sys.s; freebsd is similar
+	// see comment in sys_linux_386.s; freebsd is similar
 	ADDL	$0x8, BX
 
 	// set up data_desc
@@ -263,6 +283,42 @@ TEXT runtime·i386_set_ldt(SB),7,$16
 	CMPL	AX, $0xfffff001
 	JLS	2(PC)
 	INT	$3
+	RET
+
+TEXT runtime·sysctl(SB),7,$28
+	LEAL	arg0+0(FP), SI
+	LEAL	4(SP), DI
+	CLD
+	MOVSL				// arg 1 - name
+	MOVSL				// arg 2 - namelen
+	MOVSL				// arg 3 - oldp
+	MOVSL				// arg 4 - oldlenp
+	MOVSL				// arg 5 - newp
+	MOVSL				// arg 6 - newlen
+	MOVL	$202, AX		// sys___sysctl
+	INT	$0x80
+	JCC	3(PC)
+	NEGL	AX
+	RET
+	MOVL	$0, AX
+	RET
+
+TEXT runtime·osyield(SB),7,$-4
+	MOVL	$331, AX		// sys_sched_yield
+	INT	$0x80
+	RET
+
+TEXT runtime·sigprocmask(SB),7,$16
+	MOVL	$0, 0(SP)		// syscall gap
+	MOVL	$3, 4(SP)		// arg 1 - how (SIG_SETMASK)
+	MOVL	args+0(FP), AX
+	MOVL	AX, 8(SP)		// arg 2 - set
+	MOVL	args+4(FP), AX
+	MOVL	AX, 12(SP)		// arg 3 - oset
+	MOVL	$340, AX		// sys_sigprocmask
+	INT	$0x80
+	JAE	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 GLOBL runtime·tlsoffset(SB),$4

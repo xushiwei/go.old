@@ -226,7 +226,7 @@ void
 time·now(int64 sec, int32 usec)
 {
 	int64 ns;
-	
+
 	ns = runtime·nanotime();
 	sec = ns / 1000000000LL;
 	usec = ns - sec * 1000000000LL;
@@ -270,8 +270,11 @@ runtime·sigpanic(void)
 {
 	switch(g->sig) {
 	case EXCEPTION_ACCESS_VIOLATION:
-		if(g->sigcode1 < 0x1000)
+		if(g->sigcode1 < 0x1000) {
+			if(g->sigpc == 0)
+				runtime·panicstring("call of nil func value");
 			runtime·panicstring("invalid memory address or nil pointer dereference");
+		}
 		runtime·printf("unexpected fault address %p\n", g->sigcode1);
 		runtime·throw("fault");
 	case EXCEPTION_INT_DIVIDE_BY_ZERO:
@@ -288,19 +291,15 @@ runtime·sigpanic(void)
 	runtime·throw("fault");
 }
 
-String
-runtime·signame(int32 sig)
-{
-	int8 *s;
+extern void *runtime·sigtramp;
 
-	switch(sig) {
-	case SIGINT:
-		s = "SIGINT: interrupt";
-		break;
-	default:
-		return runtime·emptystring;
-	}
-	return runtime·gostringnocopy((byte*)s);
+void
+runtime·initsig(void)
+{
+	// following line keeps sigtramp alive at link stage
+	// if there's a better way please write it here
+	void *p = runtime·sigtramp;
+	USED(p);
 }
 
 uint32
@@ -411,3 +410,21 @@ os·sigpipe(void)
 {
 	runtime·throw("too many writes on closed pipe");
 }
+
+uintptr
+runtime·memlimit(void)
+{
+	return 0;
+}
+
+void
+runtime·setprof(bool on)
+{
+	USED(on);
+}
+
+int8 runtime·badcallbackmsg[] = "runtime: cgo callback on thread not created by Go.\n";
+int32 runtime·badcallbacklen = sizeof runtime·badcallbackmsg - 1;
+
+int8 runtime·badsignalmsg[] = "runtime: signal received on thread not created by Go.\n";
+int32 runtime·badsignallen = sizeof runtime·badsignalmsg - 1;

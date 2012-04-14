@@ -5,14 +5,6 @@
 #include "zasm_GOOS_GOARCH.h"
 
 TEXT _rt0_386(SB),7,$0
-	// Linux, Windows start the FPU in extended double precision.
-	// Other operating systems use double precision.
-	// Change to double precision to match them,
-	// and to match other hardware that only has double.
-	PUSHL $0x27F
-	FLDCW	0(SP)
-	POPL AX
-
 	// copy arguments forward on an even stack
 	MOVL	0(SP), AX		// argc
 	LEAL	4(SP), BX		// argv
@@ -97,6 +89,16 @@ ok:
 
 TEXT runtime·breakpoint(SB),7,$0
 	INT $3
+	RET
+
+TEXT runtime·asminit(SB),7,$0
+	// Linux, Windows start the FPU in extended double precision.
+	// Other operating systems use double precision.
+	// Change to double precision to match them,
+	// and to match other hardware that only has double.
+	PUSHL $0x27F
+	FLDCW	0(SP)
+	POPL AX
 	RET
 
 /*
@@ -423,6 +425,14 @@ TEXT runtime·cgocallback(SB),7,$12
 	// Save current m->g0->sched.sp on stack and then set it to SP.
 	get_tls(CX)
 	MOVL	m(CX), BP
+
+	// If m is nil, it is almost certainly because we have been called
+	// on a thread that Go did not create.  We're going to crash as
+	// soon as we try to use m; instead, try to print a nice error and exit.
+	CMPL	BP, $0
+	JNE 2(PC)
+	CALL	runtime·badcallback(SB)
+
 	MOVL	m_g0(BP), SI
 	PUSHL	(g_sched+gobuf_sp)(SI)
 	MOVL	SP, (g_sched+gobuf_sp)(SI)
@@ -524,6 +534,15 @@ TEXT runtime·getcallersp(SB), 7, $0
 	MOVL	sp+0(FP), AX
 	RET
 
+// int64 runtime·cputicks(void), so really
+// void runtime·cputicks(int64 *ticks)
+TEXT runtime·cputicks(SB),7,$0
+	RDTSC
+	MOVL	ret+0(FP), DI
+	MOVL	AX, 0(DI)
+	MOVL	DX, 4(DI)
+	RET
+
 TEXT runtime·ldt0setup(SB),7,$16
 	// set up ldt 7 to point at tls0
 	// ldt 1 would be fine on Linux, but on OS X, 7 is as low as we can go.
@@ -540,5 +559,14 @@ TEXT runtime·emptyfunc(SB),0,$0
 
 TEXT runtime·abort(SB),7,$0
 	INT $0x3
+
+TEXT runtime·stackguard(SB),7,$0
+	MOVL	SP, DX
+	MOVL	DX, sp+0(FP)
+	get_tls(CX)
+	MOVL	g(CX), BX
+	MOVL	g_stackguard(BX), DX
+	MOVL	DX, guard+4(FP)
+	RET
 
 GLOBL runtime·tls0(SB), $32

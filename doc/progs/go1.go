@@ -8,13 +8,18 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"testing"
 	"time"
 	"unicode"
 )
 
 func main() {
+	flag.Parse()
 	stringAppend()
 	mapDelete()
 	mapIteration()
@@ -24,6 +29,15 @@ func main() {
 	runeType()
 	errorExample()
 	timePackage()
+	walkExample()
+	osIsExist()
+}
+
+var timeout = flag.Duration("timeout", 30*time.Second, "how long to wait for completion")
+
+func init() {
+	// canonicalize the logging
+	log.SetFlags(0)
 }
 
 func mapDelete() {
@@ -147,6 +161,7 @@ type SyntaxError struct {
 func (se *SyntaxError) Error() string {
 	return fmt.Sprintf("%s:%d: %s", se.File, se.Line, se.Message)
 }
+
 // END ERROR EXAMPLE OMIT
 
 func errorExample() {
@@ -167,12 +182,31 @@ func sleepUntil(wakeup time.Time) {
 		return
 	}
 	delta := wakeup.Sub(now) // A Duration.
-	log.Printf("Sleeping for %.3fs", delta.Seconds())
+	fmt.Printf("Sleeping for %.3fs\n", delta.Seconds())
 	time.Sleep(delta)
 }
 
 func timePackage() {
 	sleepUntil(time.Now().Add(123 * time.Millisecond))
+}
+
+func walkExample() {
+	// STARTWALK OMIT
+	markFn := func(path string, info os.FileInfo, err error) error {
+		if path == "pictures" { // Will skip walking of directory pictures and its contents.
+			return filepath.SkipDir
+		}
+		if err != nil {
+			return err
+		}
+		log.Println(path)
+		return nil
+	}
+	err := filepath.Walk(".", markFn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// ENDWALK OMIT
 }
 
 func initializationFunction(c chan int) {
@@ -185,4 +219,27 @@ func init() {
 	c := make(chan int)
 	go initializationFunction(c)
 	PackageGlobal = <-c
+}
+
+func BenchmarkSprintf(b *testing.B) {
+	// Verify correctness before running benchmark.
+	b.StopTimer()
+	got := fmt.Sprintf("%x", 23)
+	const expect = "17"
+	if expect != got {
+		b.Fatalf("expected %q; got %q", expect, got)
+	}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		fmt.Sprintf("%x", 23)
+	}
+}
+
+func osIsExist() {
+	name := "go1.go"
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	if os.IsExist(err) {
+		log.Printf("%s already exists", name)
+	}
+	_ = f
 }

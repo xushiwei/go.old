@@ -43,11 +43,13 @@ enum
 	SPCLNTAB,
 	SELFROSECT,
 	SELFSECT,
+	SNOPTRDATA,
 	SDATA,
 	SMACHO,	/* Mach-O __nl_symbol_ptr */
 	SMACHOGOT,
 	SWINDOWS,
 	SBSS,
+	SNOPTRBSS,
 
 	SXREF,
 	SMACHODYNSTR,
@@ -101,7 +103,7 @@ struct Section
 };
 
 extern	char	symname[];
-extern	char	*libdir[];
+extern	char	**libdir;
 extern	int	nlibdir;
 
 EXTERN	char*	INITENTRY;
@@ -179,6 +181,7 @@ void	reloc(void);
 void	relocsym(Sym*);
 void	savedata(Sym*, Prog*, char*);
 void	symgrow(Sym*, int32);
+void	addstrdata(char*, char*);
 vlong	addstring(Sym*, char*);
 vlong	adduint32(Sym*, uint32);
 vlong	adduint64(Sym*, uint64);
@@ -193,6 +196,7 @@ void	asmelfsym(void);
 void	asmplan9sym(void);
 void	strnput(char*, int);
 void	dodata(void);
+void	dosymtype(void);
 void	address(void);
 void	textaddress(void);
 void	genasmsym(void (*put)(Sym*, char*, int, vlong, vlong, int, Sym*));

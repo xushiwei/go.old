@@ -16,7 +16,7 @@ TEXT _rt0_amd64(SB),7,$-8
 	// create istack out of the given (operating system) stack.
 	// initcgo may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
-	LEAQ	(-8192+104)(SP), BX
+	LEAQ	(-64*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard(DI)
 	MOVQ	SP, g_stackbase(DI)
 
@@ -24,7 +24,9 @@ TEXT _rt0_amd64(SB),7,$-8
 	MOVQ	initcgo(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
-	CALL	AX  // g0 already in DI
+	// g0 already in DI
+	MOVQ	DI, CX	// Win64 uses CX for first parameter
+	CALL	AX
 	CMPL	runtime·iswindows(SB), $0
 	JEQ ok
 
@@ -71,11 +73,15 @@ ok:
 	// start this M
 	CALL	runtime·mstart(SB)
 
-	CALL	runtime·notok(SB)		// never returns
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·breakpoint(SB),7,$0
 	BYTE	$0xcc
+	RET
+
+TEXT runtime·asminit(SB),7,$0
+	// No per-thread init.
 	RET
 
 /*
@@ -465,6 +471,14 @@ TEXT runtime·cgocallback(SB),7,$24
 	// Save current m->g0->sched.sp on stack and then set it to SP.
 	get_tls(CX)
 	MOVQ	m(CX), BP
+	
+	// If m is nil, it is almost certainly because we have been called
+	// on a thread that Go did not create.  We're going to crash as
+	// soon as we try to use m; instead, try to print a nice error and exit.
+	CMPQ	BP, $0
+	JNE 2(PC)
+	CALL	runtime·badcallback(SB)
+
 	MOVQ	m_g0(BP), SI
 	PUSHQ	(g_sched+gobuf_sp)(SI)
 	MOVQ	SP, (g_sched+gobuf_sp)(SI)
@@ -564,6 +578,22 @@ TEXT runtime·setcallerpc(SB),7,$0
 
 TEXT runtime·getcallersp(SB),7,$0
 	MOVQ	sp+0(FP), AX
+	RET
+
+// int64 runtime·cputicks(void)
+TEXT runtime·cputicks(SB),7,$0
+	RDTSC
+	SHLQ	$32, DX
+	ADDQ	DX, AX
+	RET
+
+TEXT runtime·stackguard(SB),7,$0
+	MOVQ	SP, DX
+	MOVQ	DX, sp+0(FP)
+	get_tls(CX)
+	MOVQ	g(CX), BX
+	MOVQ	g_stackguard(BX), DX
+	MOVQ	DX, guard+8(FP)
 	RET
 
 GLOBL runtime·tls0(SB), $64

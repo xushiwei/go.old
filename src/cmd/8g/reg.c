@@ -220,6 +220,9 @@ regopt(Prog *firstp)
 		 * funny
 		 */
 		case ALEAL:
+		case AFMOVL: 
+		case AFMOVW:
+		case AFMOVV:
 			setaddrs(bit);
 			break;
 
@@ -741,7 +744,7 @@ addmove(Reg *r, int bn, int rn, int f)
 	p1->as = AMOVL;
 	switch(v->etype) {
 	default:
-		fatal("unknown type\n");
+		fatal("unknown type %E", v->etype);
 	case TINT8:
 	case TUINT8:
 	case TBOOL:
@@ -964,6 +967,13 @@ prop(Reg *r, Bits ref, Bits cal)
 				cal.b[z] = externs.b[z] | ovar.b[z];
 				ref.b[z] = 0;
 			}
+			break;
+
+		default:
+			// Work around for issue 1304:
+			// flush modified globals before each instruction.
+			for(z=0; z<BITS; z++)
+				cal.b[z] |= externs.b[z];
 			break;
 		}
 		for(z=0; z<BITS; z++) {

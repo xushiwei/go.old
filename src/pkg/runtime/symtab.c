@@ -381,6 +381,15 @@ runtime·funcline(Func *f, uintptr targetpc)
 	return line;
 }
 
+void
+runtime·funcline_go(Func *f, uintptr targetpc, String retfile, int32 retline)
+{
+	retfile = f->src;
+	retline = runtime·funcline(f, targetpc);
+	FLUSH(&retfile);
+	FLUSH(&retline);
+}
+
 static void
 buildfuncs(void)
 {
@@ -428,13 +437,17 @@ runtime·findfunc(uintptr addr)
 	// (Before enabling the signal handler,
 	// SetCPUProfileRate calls findfunc to trigger
 	// the initialization outside the handler.)
-	if(runtime·atomicload(&funcinit) == 0) {
-		runtime·lock(&funclock);
-		if(funcinit == 0) {
-			buildfuncs();
-			runtime·atomicstore(&funcinit, 1);
+	// Avoid deadlock on fault during malloc
+	// by not calling buildfuncs if we're already in malloc.
+	if(!m->mallocing && !m->gcing) {
+		if(runtime·atomicload(&funcinit) == 0) {
+			runtime·lock(&funclock);
+			if(funcinit == 0) {
+				buildfuncs();
+				runtime·atomicstore(&funcinit, 1);
+			}
+			runtime·unlock(&funclock);
 		}
-		runtime·unlock(&funclock);
 	}
 
 	if(nfunc == 0)
@@ -498,6 +511,9 @@ contains(String s, int8 *p)
 bool
 runtime·showframe(Func *f)
 {
-	// return 1;  // for debugging - show all frames
-	return contains(f->name, ".") && !hasprefix(f->name, "runtime.");
+	static int32 traceback = -1;
+	
+	if(traceback < 0)
+		traceback = runtime·gotraceback();
+	return traceback > 1 || contains(f->name, ".") && !hasprefix(f->name, "runtime.");
 }

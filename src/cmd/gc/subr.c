@@ -515,22 +515,30 @@ algtype1(Type *t, Type **bad)
 	case TINT:
 	case TUINT:
 	case TUINTPTR:
-	case TCOMPLEX64:
-	case TCOMPLEX128:
-	case TFLOAT32:
-	case TFLOAT64:
 	case TBOOL:
 	case TPTR32:
 	case TPTR64:
 	case TCHAN:
 	case TUNSAFEPTR:
 		return AMEM;
-	
+
 	case TFUNC:
 	case TMAP:
 		if(bad)
 			*bad = t;
 		return ANOEQ;
+
+	case TFLOAT32:
+		return AFLOAT32;
+
+	case TFLOAT64:
+		return AFLOAT64;
+
+	case TCOMPLEX64:
+		return ACPLX64;
+
+	case TCOMPLEX128:
+		return ACPLX128;
 
 	case TSTRING:
 		return ASTRING;
@@ -563,6 +571,8 @@ algtype1(Type *t, Type **bad)
 		}
 		ret = AMEM;
 		for(t1=t->type; t1!=T; t1=t1->down) {
+			if(isblanksym(t1->sym))
+				continue;
 			a = algtype1(t1->type, bad);
 			if(a == ANOEQ)
 				return ANOEQ;  // not comparable
@@ -586,6 +596,8 @@ algtype(Type *t)
 		if(isslice(t))
 			return ASLICE;
 		switch(t->width) {
+		case 0:
+			return a + AMEM0 - AMEM;
 		case 1:
 			return a + AMEM8 - AMEM;
 		case 2:
@@ -878,11 +890,19 @@ isslice(Type *t)
 int
 isblank(Node *n)
 {
+	if(n == N)
+		return 0;
+	return isblanksym(n->sym);
+}
+
+int
+isblanksym(Sym *s)
+{
 	char *p;
 
-	if(n == N || n->sym == S)
+	if(s == S)
 		return 0;
-	p = n->sym->name;
+	p = s->name;
 	if(p == nil)
 		return 0;
 	return p[0] == '_' && p[1] == '\0';
@@ -924,7 +944,7 @@ isideal(Type *t)
  * return type to hang methods off (r).
  */
 Type*
-methtype(Type *t)
+methtype(Type *t, int mustname)
 {
 	if(t == T)
 		return T;
@@ -939,7 +959,7 @@ methtype(Type *t)
 	}
 
 	// need a type name
-	if(t->sym == S)
+	if(t->sym == S && (mustname || t->etype != TSTRUCT))
 		return T;
 
 	// check types
@@ -984,6 +1004,25 @@ eqnote(Strlit *a, Strlit *b)
 	return memcmp(a->s, b->s, a->len) == 0;
 }
 
+typedef struct TypePairList TypePairList;
+struct TypePairList
+{
+	Type *t1;
+	Type *t2;
+	TypePairList *next;
+};
+
+static int
+onlist(TypePairList *l, Type *t1, Type *t2) 
+{
+	for(; l; l=l->next)
+		if((l->t1 == t1 && l->t2 == t2) || (l->t1 == t2 && l->t2 == t1))
+			return 1;
+	return 0;
+}
+
+static int eqtype1(Type*, Type*, TypePairList*);
+
 // Return 1 if t1 and t2 are identical, following the spec rules.
 //
 // Any cyclic type must go through a named type, and if one is
@@ -993,6 +1032,14 @@ eqnote(Strlit *a, Strlit *b)
 int
 eqtype(Type *t1, Type *t2)
 {
+	return eqtype1(t1, t2, nil);
+}
+
+static int
+eqtype1(Type *t1, Type *t2, TypePairList *assumed_equal)
+{
+	TypePairList l;
+
 	if(t1 == t2)
 		return 1;
 	if(t1 == T || t2 == T || t1->etype != t2->etype)
@@ -1014,16 +1061,24 @@ eqtype(Type *t1, Type *t2)
 		return 0;
 	}
 
+	if(onlist(assumed_equal, t1, t2))
+		return 1;
+	l.next = assumed_equal;
+	l.t1 = t1;
+	l.t2 = t2;
+
 	switch(t1->etype) {
 	case TINTER:
 	case TSTRUCT:
 		for(t1=t1->type, t2=t2->type; t1 && t2; t1=t1->down, t2=t2->down) {
 			if(t1->etype != TFIELD || t2->etype != TFIELD)
 				fatal("struct/interface missing field: %T %T", t1, t2);
-			if(t1->sym != t2->sym || t1->embedded != t2->embedded || !eqtype(t1->type, t2->type) || !eqnote(t1->note, t2->note))
-				return 0;
+			if(t1->sym != t2->sym || t1->embedded != t2->embedded || !eqtype1(t1->type, t2->type, &l) || !eqnote(t1->note, t2->note))
+				goto no;
 		}
-		return t1 == T && t2 == T;
+		if(t1 == T && t2 == T)
+			goto yes;
+		goto no;
 
 	case TFUNC:
 		// Loop over structs: receiver, in, out.
@@ -1037,26 +1092,36 @@ eqtype(Type *t1, Type *t2)
 			for(ta=t1->type, tb=t2->type; ta && tb; ta=ta->down, tb=tb->down) {
 				if(ta->etype != TFIELD || tb->etype != TFIELD)
 					fatal("func struct missing field: %T %T", ta, tb);
-				if(ta->isddd != tb->isddd || !eqtype(ta->type, tb->type))
-					return 0;
+				if(ta->isddd != tb->isddd || !eqtype1(ta->type, tb->type, &l))
+					goto no;
 			}
 			if(ta != T || tb != T)
-				return 0;
+				goto no;
 		}
-		return t1 == T && t2 == T;
+		if(t1 == T && t2 == T)
+			goto yes;
+		goto no;
 	
 	case TARRAY:
 		if(t1->bound != t2->bound)
-			return 0;
+			goto no;
 		break;
 	
 	case TCHAN:
 		if(t1->chan != t2->chan)
-			return 0;
+			goto no;
 		break;
 	}
 
-	return eqtype(t1->down, t2->down) && eqtype(t1->type, t2->type);
+	if(eqtype1(t1->down, t2->down, &l) && eqtype1(t1->type, t2->type, &l))
+		goto yes;
+	goto no;
+
+yes:
+	return 1;
+
+no:
+	return 0;
 }
 
 // Are t1 and t2 equal struct types when field names are ignored?
@@ -1092,7 +1157,9 @@ assignop(Type *src, Type *dst, char **why)
 	if(why != nil)
 		*why = "";
 
-	if(safemode && src != T && src->etype == TUNSAFEPTR) {
+	// TODO(rsc,lvd): This behaves poorly in the presence of inlining.
+	// https://code.google.com/p/go/issues/detail?id=2795
+	if(safemode && importpkg == nil && src != T && src->etype == TUNSAFEPTR) {
 		yyerror("cannot use unsafe.Pointer");
 		errorexit();
 	}
@@ -1286,6 +1353,18 @@ assignconv(Node *n, Type *t, char *context)
 	old->diag--;
 	if(t->etype == TBLANK)
 		return n;
+
+	// Convert ideal bool from comparison to plain bool
+	// if the next step is non-bool (like interface{}).
+	if(n->type == idealbool && t->etype != TBOOL) {
+		if(n->op == ONAME || n->op == OLITERAL) {
+			r = nod(OCONVNOP, n, N);
+			r->type = types[TBOOL];
+			r->typecheck = 1;
+			r->implicit = 1;
+			n = r;
+		}
+	}
 
 	if(eqtype(n->type, t))
 		return n;
@@ -1611,6 +1690,11 @@ ullmancalc(Node *n)
 	if(n == N)
 		return;
 
+	if(n->ninit != nil) {
+		ul = UINF;
+		goto out;
+	}
+
 	switch(n->op) {
 	case OREGISTER:
 	case OLITERAL:
@@ -1908,7 +1992,7 @@ safeexpr(Node *n, NodeList **init)
 	return cheapexpr(n, init);
 }
 
-static Node*
+Node*
 copyexpr(Node *n, Type *t, NodeList **init)
 {
 	Node *a, *l;
@@ -2017,7 +2101,7 @@ lookdot0(Sym *s, Type *t, Type **save, int ignorecase)
 				c++;
 			}
 	}
-	u = methtype(t);
+	u = methtype(t, 0);
 	if(u != T) {
 		for(f=u->method; f!=T; f=f->down)
 			if(f->embedded == 0 && (f->sym == s || (ignorecase && ucistrcmp(f->sym->name, s->name) == 0))) {
@@ -2106,8 +2190,11 @@ adddot(Node *n)
 	goto ret;
 
 out:
-	if(c > 1)
-		yyerror("ambiguous DOT reference %T.%S", t, s);
+	if(c > 1) {
+		yyerror("ambiguous selector %N", n);
+		n->left = N;
+		return n;
+	}
 
 	// rebuild elided dots
 	for(c=d-1; c>=0; c--)
@@ -2164,7 +2251,7 @@ expand0(Type *t, int followptr)
 		return;
 	}
 
-	u = methtype(t);
+	u = methtype(t, 0);
 	if(u != T) {
 		for(f=u->method; f!=T; f=f->down) {
 			if(f->sym->flags & SymUniq)
@@ -2214,14 +2301,12 @@ out:
 }
 
 void
-expandmeth(Sym *s, Type *t)
+expandmeth(Type *t)
 {
 	Symlink *sl;
 	Type *f;
 	int c, d;
 
-	if(s == S)
-		return;
 	if(t == T || t->xmethod != nil)
 		return;
 
@@ -2424,7 +2509,7 @@ genwrapper(Type *rcvr, Type *method, Sym *newnam, int iface)
 }
 
 static Node*
-hashmem(Type *t, vlong width)
+hashmem(Type *t)
 {
 	Node *tfn, *n;
 	Sym *sym;
@@ -2452,7 +2537,7 @@ hashfor(Type *t)
 	a = algtype1(t, nil);
 	switch(a) {
 	case AMEM:
-		return hashmem(t, t->width);
+		return hashmem(t);
 	case AINTER:
 		sym = pkglookup("interhash", runtimepkg);
 		break;
@@ -2461,6 +2546,18 @@ hashfor(Type *t)
 		break;
 	case ASTRING:
 		sym = pkglookup("strhash", runtimepkg);
+		break;
+	case AFLOAT32:
+		sym = pkglookup("f32hash", runtimepkg);
+		break;
+	case AFLOAT64:
+		sym = pkglookup("f64hash", runtimepkg);
+		break;
+	case ACPLX64:
+		sym = pkglookup("c64hash", runtimepkg);
+		break;
+	case ACPLX128:
+		sym = pkglookup("c128hash", runtimepkg);
 		break;
 	default:
 		sym = typesymprefix(".hash", t);
@@ -2488,7 +2585,7 @@ genhash(Sym *sym, Type *t)
 	Node *hashel;
 	Type *first, *t1;
 	int old_safemode;
-	int64 size;
+	int64 size, mul;
 
 	if(debug['r'])
 		print("genhash %S %T\n", sym, t);
@@ -2545,6 +2642,17 @@ genhash(Sym *sym, Type *t)
 					nod(OLSH, nod(OIND, nh, N), nodintconst(3)),
 					nod(ORSH, nod(OIND, nh, N), nodintconst(widthptr*8-3)))));
 
+		// *h *= mul
+		// Same multipliers as in runtime.memhash.
+		if(widthptr == 4)
+			mul = 3267000013LL;
+		else
+			mul = 23344194077549503LL;
+		n->nbody = list(n->nbody,
+			nod(OAS,
+				nod(OIND, nh, N),
+				nod(OMUL, nod(OIND, nh, N), nodintconst(mul))));
+
 		// hashel(h, sizeof(p[i]), &p[i])
 		call = nod(OCALL, hashel, N);
 		call->list = list(call->list, nh);
@@ -2564,12 +2672,14 @@ genhash(Sym *sym, Type *t)
 		// and calling specific hash functions for the others.
 		first = T;
 		for(t1=t->type;; t1=t1->down) {
-			if(t1 != T && algtype1(t1->type, nil) == AMEM) {
+			if(t1 != T && (isblanksym(t1->sym) || algtype1(t1->type, nil) == AMEM)) {
 				if(first == T)
 					first = t1;
 				continue;
 			}
 			// Run memhash for fields up to this one.
+			while(first != T && isblanksym(first->sym))
+				first = first->down;
 			if(first != T) {
 				if(first->down == t1)
 					size = first->type->width;
@@ -2577,7 +2687,7 @@ genhash(Sym *sym, Type *t)
 					size = t->width - first->width;  // first->width is offset
 				else
 					size = t1->width - first->width;  // both are offsets
-				hashel = hashmem(first->type, size);
+				hashel = hashmem(first->type);
 				// hashel(h, size, &p.first)
 				call = nod(OCALL, hashel, N);
 				call->list = list(call->list, nh);
@@ -2779,7 +2889,7 @@ geneq(Sym *sym, Type *t)
 		// and calling specific equality tests for the others.
 		first = T;
 		for(t1=t->type;; t1=t1->down) {
-			if(t1 != T && algtype1(t1->type, nil) == AMEM) {
+			if(t1 != T && (isblanksym(t1->sym) || algtype1(t1->type, nil) == AMEM)) {
 				if(first == T)
 					first = t1;
 				continue;
@@ -2787,13 +2897,16 @@ geneq(Sym *sym, Type *t)
 			// Run memequal for fields up to this one.
 			// TODO(rsc): All the calls to newname are wrong for
 			// cross-package unexported fields.
+			while(first != T && isblanksym(first->sym))
+				first = first->down;
 			if(first != T) {
 				if(first->down == t1) {
 					fn->nbody = list(fn->nbody, eqfield(np, nq, newname(first->sym), neq));
 				} else if(first->down->down == t1) {
 					fn->nbody = list(fn->nbody, eqfield(np, nq, newname(first->sym), neq));
 					first = first->down;
-					fn->nbody = list(fn->nbody, eqfield(np, nq, newname(first->sym), neq));
+					if(!isblanksym(first->sym))
+						fn->nbody = list(fn->nbody, eqfield(np, nq, newname(first->sym), neq));
 				} else {
 					// More than two fields: use memequal.
 					if(t1 == T)
@@ -2906,9 +3019,9 @@ implements(Type *t, Type *iface, Type **m, Type **samename, int *ptr)
 		return 1;
 	}
 
-	t = methtype(t);
+	t = methtype(t, 0);
 	if(t != T)
-		expandmeth(t->sym, t);
+		expandmeth(t);
 	for(im=iface->type; im; im=im->down) {
 		imtype = methodfunc(im->type, 0);
 		tm = ifacelookdot(im->sym, t, &followptr, 0);
@@ -3444,11 +3557,9 @@ mkpkg(Strlit *path)
 {
 	Pkg *p;
 	int h;
-	
-	if(strlen(path->s) != path->len) {
-		yyerror("import path contains NUL byte");
+
+	if(isbadimport(path))
 		errorexit();
-	}
 	
 	h = stringhash(path->s) & (nelem(phash)-1);
 	for(p=phash[h]; p; p=p->link)
@@ -3472,4 +3583,66 @@ strlit(char *s)
 	strcpy(t->s, s);
 	t->len = strlen(s);
 	return t;
+}
+
+void
+addinit(Node **np, NodeList *init)
+{
+	Node *n;
+	
+	if(init == nil)
+		return;
+
+	n = *np;
+	switch(n->op) {
+	case ONAME:
+	case OLITERAL:
+		// There may be multiple refs to this node;
+		// introduce OCONVNOP to hold init list.
+		n = nod(OCONVNOP, n, N);
+		n->type = n->left->type;
+		n->typecheck = 1;
+		*np = n;
+		break;
+	}
+	n->ninit = concat(init, n->ninit);
+	n->ullman = UINF;
+}
+
+int
+isbadimport(Strlit *path)
+{
+	char *s;
+	Rune r;
+
+	if(strlen(path->s) != path->len) {
+		yyerror("import path contains NUL");
+		return 1;
+	}
+
+	s = path->s;
+	while(*s) {
+		s += chartorune(&r, s);
+		if(r == Runeerror) {
+			yyerror("import path contains invalid UTF-8 sequence: \"%Z\"", path);
+			return 1;
+		}
+		if(r < 0x20 || r == 0x7f) {
+			yyerror("import path contains control character: \"%Z\"", path);
+			return 1;
+		}
+		if(r == '\\') {
+			yyerror("import path contains backslash; use slash: \"%Z\"", path);
+			return 1;
+		}
+		if(isspacerune(r)) {
+			yyerror("import path contains space character: \"%Z\"", path);
+			return 1;
+		}
+		if(utfrune("!\"#$%&'()*,:;<=>?[]^`{|}", r)) {
+			yyerror("import path contains invalid character '%C': \"%Z\"", r, path);
+			return 1;
+		}
+	}
+	return 0;
 }

@@ -540,7 +540,7 @@ loop:
 	}
 
 	// deal with the variables one-at-a-time
-	if(c0->type != Texprconst) {
+	if(!okforcmp[t->etype] || c0->type != Texprconst) {
 		a = exprbsw(c0, 1, arg);
 		cas = list(cas, a);
 		c0 = c0->link;
@@ -792,7 +792,6 @@ walkswitch(Node *sw)
 	 * cases have OGOTO into statements.
 	 * both have inserted OBREAK statements
 	 */
-	walkstmtlist(sw->ninit);
 	if(sw->ntest == N) {
 		sw->ntest = nodbool(1);
 		typecheck(&sw->ntest, Erv);
@@ -890,7 +889,7 @@ typecheckswitch(Node *n)
 						yyerror("%lN is not a type", ll->n);
 						// reset to original type
 						ll->n = n->ntest->right;
-					} else if(!implements(ll->n->type, t, &missing, &have, &ptr)) {
+					} else if(ll->n->type->etype != TINTER && !implements(ll->n->type, t, &missing, &have, &ptr)) {
 						if(have && !missing->broke && !have->broke)
 							yyerror("impossible type switch case: %lN cannot have dynamic type %T"
 								" (wrong type for %S method)\n\thave %S%hT\n\twant %S%hT",

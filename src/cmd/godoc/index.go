@@ -44,16 +44,16 @@ import (
 	"errors"
 	"go/ast"
 	"go/parser"
-	"go/scanner"
 	"go/token"
 	"index/suffixarray"
 	"io"
 	"os"
-	"path/filepath"
+	pathpkg "path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ----------------------------------------------------------------------------
@@ -248,7 +248,7 @@ type File struct {
 
 // Path returns the file path of f.
 func (f *File) Path() string {
-	return filepath.Join(f.Pak.Path, f.Name)
+	return pathpkg.Join(f.Pak.Path, f.Name)
 }
 
 // A Spot describes a single occurrence of a word.
@@ -695,7 +695,7 @@ var whitelisted = map[string]bool{
 // of "permitted" files for indexing. The filename must
 // be the directory-local name of the file.
 func isWhitelisted(filename string) bool {
-	key := filepath.Ext(filename)
+	key := pathpkg.Ext(filename)
 	if key == "" {
 		// file has no extension - use entire filename
 		key = filename
@@ -708,7 +708,7 @@ func (x *Indexer) visitFile(dirname string, f os.FileInfo, fulltextIndex bool) {
 		return
 	}
 
-	filename := filepath.Join(dirname, f.Name())
+	filename := pathpkg.Join(dirname, f.Name())
 	goFile := false
 
 	switch {
@@ -867,7 +867,10 @@ func (x *Index) Write(w io.Writer) error {
 		return err
 	}
 	if fulltext {
-		if err := x.fset.Write(w); err != nil {
+		encode := func(x interface{}) error {
+			return gob.NewEncoder(w).Encode(x)
+		}
+		if err := x.fset.Write(encode); err != nil {
 			return err
 		}
 		if err := x.suffixes.Write(w); err != nil {
@@ -893,7 +896,10 @@ func (x *Index) Read(r io.Reader) error {
 	x.snippets = fx.Snippets
 	if fx.Fulltext {
 		x.fset = token.NewFileSet()
-		if err := x.fset.Read(r); err != nil {
+		decode := func(x interface{}) error {
+			return gob.NewDecoder(r).Decode(x)
+		}
+		if err := x.fset.Read(decode); err != nil {
 			return err
 		}
 		x.suffixes = new(suffixarray.Index)
@@ -921,15 +927,15 @@ func (x *Index) lookupWord(w string) (match *LookupResult, alt *AltWords) {
 	return
 }
 
+// isIdentifier reports whether s is a Go identifier.
 func isIdentifier(s string) bool {
-	var S scanner.Scanner
-	fset := token.NewFileSet()
-	S.Init(fset.AddFile("", fset.Base(), len(s)), []byte(s), nil, 0)
-	if _, tok, _ := S.Scan(); tok == token.IDENT {
-		_, tok, _ := S.Scan()
-		return tok == token.EOF
+	for i, ch := range s {
+		if unicode.IsLetter(ch) || ch == ' ' || i > 0 && unicode.IsDigit(ch) {
+			continue
+		}
+		return false
 	}
-	return false
+	return len(s) > 0
 }
 
 // For a given query, which is either a single identifier or a qualified

@@ -50,6 +50,13 @@ TEXT runtime·read(SB),7,$0-24
 	SYSCALL
 	RET
 
+TEXT runtime·getrlimit(SB),7,$0-24
+	MOVL	8(SP), DI
+	MOVQ	16(SP), SI
+	MOVL	$97, AX			// syscall entry
+	SYSCALL
+	RET
+
 TEXT runtime·usleep(SB),7,$16
 	MOVL	$0, DX
 	MOVL	usec+0(FP), AX
@@ -123,6 +130,18 @@ TEXT runtime·nanotime(SB), 7, $32
 	ADDQ	DX, AX
 	RET
 
+TEXT runtime·rtsigprocmask(SB),7,$0-32
+	MOVL	8(SP), DI
+	MOVQ	16(SP), SI
+	MOVQ	24(SP), DX
+	MOVL	32(SP), R10
+	MOVL	$14, AX			// syscall entry
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
+	RET
+
 TEXT runtime·rt_sigaction(SB),7,$0-32
 	MOVL	8(SP), DI
 	MOVQ	16(SP), SI
@@ -135,12 +154,17 @@ TEXT runtime·rt_sigaction(SB),7,$0-32
 TEXT runtime·sigtramp(SB),7,$64
 	get_tls(BX)
 
+	// check that m exists
+	MOVQ	m(BX), BP
+	CMPQ	BP, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
+
 	// save g
 	MOVQ	g(BX), R10
 	MOVQ	R10, 40(SP)
 
 	// g = m->gsignal
-	MOVQ	m(BX), BP
 	MOVQ	m_gsignal(BP), BP
 	MOVQ	BP, g(BX)
 
@@ -155,9 +179,6 @@ TEXT runtime·sigtramp(SB),7,$64
 	get_tls(BX)
 	MOVQ	40(SP), R10
 	MOVQ	R10, g(BX)
-	RET
-
-TEXT runtime·sigignore(SB),7,$0
 	RET
 
 TEXT runtime·sigreturn(SB),7,$0
@@ -189,7 +210,7 @@ TEXT runtime·munmap(SB),7,$0
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·madvise(SB),7,$0
@@ -200,12 +221,7 @@ TEXT runtime·madvise(SB),7,$0
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
-	CALL	runtime·notok(SB)
-	RET
-
-TEXT runtime·notok(SB),7,$0
-	MOVQ	$0xf1, BP
-	MOVQ	BP, (BP)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
@@ -274,7 +290,7 @@ TEXT runtime·sigaltstack(SB),7,$-8
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // set tls base to DI
@@ -287,7 +303,7 @@ TEXT runtime·settls(SB),7,$32
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·osyield(SB),7,$0

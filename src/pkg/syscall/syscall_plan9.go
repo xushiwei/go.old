@@ -13,8 +13,6 @@ package syscall
 
 import "unsafe"
 
-const OS = "plan9"
-
 const ImplementsGetwd = true
 
 // ErrorString implements Error's String method by returning itself.
@@ -270,6 +268,11 @@ func Fchdir(fd int) (err error) {
 	return Chdir(path)
 }
 
+type Timespec struct {
+	Sec  int32
+	Nsec int32
+}
+
 type Timeval struct {
 	Sec  int32
 	Usec int32
@@ -330,6 +333,14 @@ func Getuid() (uid int)   { return -1 }
 
 func Getgroups() (gids []int, err error) {
 	return make([]int, 0), nil
+}
+
+type Signal int
+
+func (s Signal) Signal() {}
+
+func (s Signal) String() string {
+	return ""
 }
 
 //sys	Dup(oldfd int, newfd int) (fd int, err error)

@@ -4,7 +4,7 @@
 
 */}}{{with .PDoc}}{{if $.IsPkg}}PACKAGE
 
-package {{.PackageName}}
+package {{.Name}}
     import "{{.ImportPath}}"
 
 {{else}}COMMAND DOCUMENTATION
@@ -49,7 +49,7 @@ TYPES
 {{comment_text .Doc "    " "\t"}}
 {{end}}{{range .Vars}}{{node .Decl $.FSet}}
 {{comment_text .Doc "    " "\t"}}
-{{end}}{{range .Factories}}{{node .Decl $.FSet}}
+{{end}}{{range .Funcs}}{{node .Decl $.FSet}}
 {{comment_text .Doc "    " "\t"}}
 {{end}}{{range .Methods}}{{node .Decl $.FSet}}
 {{comment_text .Doc "    " "\t"}}
@@ -76,8 +76,8 @@ OTHER PACKAGES
 
 */}}{{with .Dirs}}
 SUBDIRECTORIES
-{{if $.DirFlat}}{{range .List}}
-	{{.Path}}{{end}}
+{{if $.DirFlat}}{{range .List}}{{if .HasPkg}}
+	{{.Path}}{{end}}{{end}}
 {{else}}{{range .List}}
 	{{repeat `. ` .Depth}}{{.Name}}{{end}}
 {{end}}{{end}}

@@ -8,15 +8,11 @@
 
 #include "zasm_GOOS_GOARCH.h"
 
-TEXT runtime·notok(SB),7,$0
-	MOVL	$0xf1, 0xf1
-	RET
-
 // Exit the entire program (like C exit)
 TEXT runtime·exit(SB),7,$0
 	MOVL	$1, AX
 	INT	$0x80
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // Exit this OS thread (like pthread_exit, which eventually
@@ -25,7 +21,7 @@ TEXT runtime·exit1(SB),7,$0
 	MOVL	$361, AX
 	INT	$0x80
 	JAE 2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·write(SB),7,$0
@@ -48,11 +44,18 @@ TEXT runtime·mmap(SB),7,$0
 	INT	$0x80
 	RET
 
+TEXT runtime·madvise(SB),7,$0
+	MOVL	$75, AX
+	INT	$0x80
+	JAE	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
+	RET
+
 TEXT runtime·munmap(SB),7,$0
 	MOVL	$73, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·setitimer(SB),7,$0
@@ -93,17 +96,24 @@ TEXT runtime·nanotime(SB), 7, $32
 	IMULL	$1000, BX
 	ADDL	BX, AX
 	ADCL	$0, DX
-	
+
 	MOVL	ret+0(FP), DI
 	MOVL	AX, 0(DI)
 	MOVL	DX, 4(DI)
+	RET
+
+TEXT runtime·sigprocmask(SB),7,$0
+	MOVL	$329, AX  // pthread_sigmask (on OS X, sigprocmask==entire process)
+	INT	$0x80
+	JAE	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigaction(SB),7,$0
 	MOVL	$46, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // Sigtramp's job is to call the actual signal handler.
@@ -116,13 +126,18 @@ TEXT runtime·sigaction(SB),7,$0
 //	20(FP)	context
 TEXT runtime·sigtramp(SB),7,$40
 	get_tls(CX)
+	
+	// check that m exists
+	MOVL	m(CX), BP
+	CMPL	BP, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
 
 	// save g
 	MOVL	g(CX), DI
 	MOVL	DI, 20(SP)
 
 	// g = m->gsignal
-	MOVL	m(CX), BP
 	MOVL	m_gsignal(BP), BP
 	MOVL	BP, g(CX)
 
@@ -151,14 +166,14 @@ TEXT runtime·sigtramp(SB),7,$40
 	MOVL	BX, 8(SP)
 	MOVL	$184, AX	// sigreturn(ucontext, infostyle)
 	INT	$0x80
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigaltstack(SB),7,$0
 	MOVL	$53, AX
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·usleep(SB),7,$32
@@ -254,7 +269,7 @@ TEXT runtime·bsdthread_register(SB),7,$40
 	MOVL	$0, 24(SP)	// dispatchqueue_offset
 	INT	$0x80
 	JAE	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // Invoke Mach system call.
@@ -331,7 +346,7 @@ TEXT runtime·setldt(SB),7,$32
 	 * To accommodate that rewrite, we translate the
 	 * address and limit here so that 0x468(GS) maps to 0(address).
 	 *
-	 * See ../../../../libcgo/darwin_386.c for the derivation
+	 * See cgo/gcc_darwin_386.c:/468 for the derivation
 	 * of the constant.
 	 */
 	SUBL	$0x468, BX

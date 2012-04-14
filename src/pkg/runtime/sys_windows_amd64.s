@@ -60,6 +60,55 @@ loadregs:
 
 	RET
 
+// This should be called on a system stack,
+// so we don't need to concern about split stack.
+TEXT runtime·badcallback(SB),7,$0
+	SUBQ	$48, SP
+
+	// stderr
+	MOVQ	$-12, CX // stderr
+	MOVQ	CX, 0(SP)
+	MOVQ	runtime·GetStdHandle(SB), AX
+	CALL	AX
+
+	MOVQ	AX, CX	// handle
+	MOVQ	CX, 0(SP)
+	MOVQ	$runtime·badcallbackmsg(SB), DX // pointer
+	MOVQ	DX, 8(SP)
+	MOVL	$runtime·badcallbacklen(SB), R8 // count
+	MOVQ	R8, 16(SP)
+	LEAQ	40(SP), R9  // written count
+	MOVQ	$0, 0(R9)
+	MOVQ	R9, 24(SP)
+	MOVQ	$0, 32(SP)	// overlapped
+	MOVQ	runtime·WriteFile(SB), AX
+	CALL	AX
+	
+	ADDQ	$48, SP
+	RET
+
+TEXT runtime·badsignal(SB),7,$48
+	// stderr
+	MOVQ	$-12, CX // stderr
+	MOVQ	CX, 0(SP)
+	MOVQ	runtime·GetStdHandle(SB), AX
+	CALL	AX
+
+	MOVQ	AX, CX	// handle
+	MOVQ	CX, 0(SP)
+	MOVQ	$runtime·badsignalmsg(SB), DX // pointer
+	MOVQ	DX, 8(SP)
+	MOVL	$runtime·badsignallen(SB), R8 // count
+	MOVQ	R8, 16(SP)
+	LEAQ	40(SP), R9  // written count
+	MOVQ	$0, 0(R9)
+	MOVQ	R9, 24(SP)
+	MOVQ	$0, 32(SP)	// overlapped
+	MOVQ	runtime·WriteFile(SB), AX
+	CALL	AX
+	
+	RET
+
 // faster get/set last error
 TEXT runtime·getlasterror(SB),7,$0
 	MOVQ	0x30(GS), AX
@@ -72,7 +121,7 @@ TEXT runtime·setlasterror(SB),7,$0
 	MOVL	AX, 0x68(CX)
 	RET
 
-TEXT runtime·sigtramp(SB),7,$56
+TEXT runtime·sigtramp(SB),7,$0
 	// CX: exception record
 	// R8: context
 
@@ -81,10 +130,23 @@ TEXT runtime·sigtramp(SB),7,$56
 	MOVL	$1, AX
 	JNZ	sigdone
 
-	// copy arguments for call to sighandler
+	// copy arguments for call to sighandler.
+
+	// Stack adjustment is here to hide from 6l,
+	// which doesn't understand that sigtramp
+	// runs on essentially unlimited stack.
+	SUBQ	$56, SP
 	MOVQ	CX, 0(SP)
 	MOVQ	R8, 8(SP)
+
 	get_tls(CX)
+
+	// check that m exists
+	MOVQ	m(CX), AX
+	CMPQ	AX, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
+
 	MOVQ	g(CX), CX
 	MOVQ	CX, 16(SP)
 
@@ -99,6 +161,8 @@ TEXT runtime·sigtramp(SB),7,$56
 	MOVQ	32(SP), BP
 	MOVQ	40(SP), SI
 	MOVQ	48(SP), DI
+	ADDQ	$56, SP
+
 sigdone:
 	RET
 
@@ -121,7 +185,7 @@ TEXT runtime·externalthreadhandler(SB),7,$0
 	PUSHQ	BX
 	PUSHQ	SI
 	PUSHQ	DI
-	PUSHQ	0x58(GS)
+	PUSHQ	0x28(GS)
 	MOVQ	SP, DX
 
 	// setup dummy m, g
@@ -131,7 +195,7 @@ TEXT runtime·externalthreadhandler(SB),7,$0
 	CALL	runtime·memclr(SB)	// smashes AX,BX,CX
 
 	LEAQ	m_tls(SP), CX
-	MOVQ	CX, 0x58(GS)
+	MOVQ	CX, 0x28(GS)
 	MOVQ	SP, m(CX)
 	MOVQ	SP, BX
 	SUBQ	$g_end, SP		// space for G
@@ -152,7 +216,7 @@ TEXT runtime·externalthreadhandler(SB),7,$0
 	get_tls(CX)
 	MOVQ	g(CX), CX
 	MOVQ	g_stackbase(CX), SP
-	POPQ	0x58(GS)
+	POPQ	0x28(GS)
 	POPQ	DI
 	POPQ	SI
 	POPQ	BX
@@ -207,15 +271,18 @@ TEXT runtime·callbackasm(SB),7,$0
 	MOVQ	R14, 8(SP)
 	MOVQ	R15, 0(SP)
 
+	// prepare call stack.  use SUBQ to hide from stack frame checks
 	// cgocallback(void (*fn)(void*), void *frame, uintptr framesize)
-	PUSHQ	DX    // uintptr framesize
-	PUSHQ	CX    // void *frame
-	PUSHQ	AX    // void (*fn)(void*)
+	SUBQ	$24, SP
+	MOVQ	DX, 16(SP)	// uintptr framesize
+	MOVQ	CX, 8(SP)   // void *frame
+	MOVQ	AX, 0(SP)    // void (*fn)(void*)
 	CLD
 	CALL  runtime·cgocallback(SB)
-	POPQ	AX
-	POPQ	CX
-	POPQ	DX
+	MOVQ	0(SP), AX
+	MOVQ	8(SP), CX
+	MOVQ	16(SP), DX
+	ADDQ	$24, SP
 
 	// restore registers as required for windows callback
 	// 6l does not allow writing many POPs here issuing a warning "nosplit stack overflow"
@@ -254,7 +321,7 @@ TEXT runtime·tstart_stdcall(SB),7,$0
 
 	// Set up tls.
 	LEAQ	m_tls(CX), SI
-	MOVQ	SI, 0x58(GS)
+	MOVQ	SI, 0x28(GS)
 	MOVQ	CX, m(SI)
 	MOVQ	DX, g(SI)
 
@@ -268,13 +335,8 @@ TEXT runtime·tstart_stdcall(SB),7,$0
 	XORL	AX, AX			// return 0 == success
 	RET
 
-TEXT runtime·notok(SB),7,$0
-	MOVQ	$0xf1, BP
-	MOVQ	BP, (BP)
-	RET
-
 // set tls base to DI
 TEXT runtime·settls(SB),7,$0
 	CALL	runtime·setstacklimits(SB)
-	MOVQ	DI, 0x58(GS)
+	MOVQ	DI, 0x28(GS)
 	RET

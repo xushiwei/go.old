@@ -1,14 +1,15 @@
-<div class="example">
+<div id="example_{{.Name}}" class="toggle">
 	<div class="collapsed">
-		<p class="exampleHeading">▹ Example</p>
+		<p class="exampleHeading toggleButton">▹ <span class="text">Example{{example_suffix .Name}}</span></p>
 	</div>
 	<div class="expanded">
-		<p class="exampleHeading">▾ Example</p>
+		<p class="exampleHeading toggleButton">▾ <span class="text">Example{{example_suffix .Name}}</span></p>
+		{{with .Doc}}<p>{{html .}}</p>{{end}}
 		<p>Code:</p>
 		<pre class="code">{{.Code}}</pre>
-		{{if .Output}}
+		{{with .Output}}
 		<p>Output:</p>
-		<pre class="output">{{html .Output}}</pre>
+		<pre class="output">{{html .}}</pre>
 		{{end}}
 	</div>
 </div>

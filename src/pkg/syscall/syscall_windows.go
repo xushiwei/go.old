@@ -11,8 +11,6 @@ import (
 	"unsafe"
 )
 
-const OS = "windows"
-
 type Handle uintptr
 
 const InvalidHandle = ^Handle(0)
@@ -79,6 +77,8 @@ func Getpagesize() int { return 4096 }
 // Errno is the Windows error number.
 type Errno uintptr
 
+func langid(pri, sub uint16) uint32 { return uint32(sub)<<10 | uint32(pri) }
+
 func (e Errno) Error() string {
 	// deal with special go errors
 	idx := int(e - APPLICATION_ERROR)
@@ -88,7 +88,7 @@ func (e Errno) Error() string {
 	// ask windows for the remaining errors
 	var flags uint32 = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ARGUMENT_ARRAY | FORMAT_MESSAGE_IGNORE_INSERTS
 	b := make([]uint16, 300)
-	n, err := FormatMessage(flags, 0, uint32(e), 0, b, nil)
+	n, err := FormatMessage(flags, 0, uint32(e), langid(LANG_ENGLISH, SUBLANG_ENGLISH_US), b, nil)
 	if err != nil {
 		return "error " + itoa(int(e)) + " (FormatMessage failed with err=" + itoa(int(err.(Errno))) + ")"
 	}
@@ -151,6 +151,7 @@ func NewCallback(fn interface{}) uintptr
 //sys	GetExitCodeProcess(handle Handle, exitcode *uint32) (err error)
 //sys	GetStartupInfo(startupInfo *StartupInfo) (err error) = GetStartupInfoW
 //sys	GetCurrentProcess() (pseudoHandle Handle, err error)
+//sys	GetProcessTimes(handle Handle, creationTime *Filetime, exitTime *Filetime, kernelTime *Filetime, userTime *Filetime) (err error)
 //sys	DuplicateHandle(hSourceProcessHandle Handle, hSourceHandle Handle, hTargetProcessHandle Handle, lpTargetHandle *Handle, dwDesiredAccess uint32, bInheritHandle bool, dwOptions uint32) (err error)
 //sys	WaitForSingleObject(handle Handle, waitMilliseconds uint32) (event uint32, err error) [failretval==0xffffffff]
 //sys	GetTempPath(buflen uint32, buf *uint16) (n uint32, err error) = GetTempPathW
@@ -173,6 +174,8 @@ func NewCallback(fn interface{}) uintptr
 //sys	SetHandleInformation(handle Handle, mask uint32, flags uint32) (err error)
 //sys	FlushFileBuffers(handle Handle) (err error)
 //sys	GetFullPathName(path *uint16, buflen uint32, buf *uint16, fname **uint16) (n uint32, err error) = kernel32.GetFullPathNameW
+//sys	GetLongPathName(path *uint16, buf *uint16, buflen uint32) (n uint32, err error) = kernel32.GetLongPathNameW
+//sys	GetShortPathName(longpath *uint16, shortpath *uint16, buflen uint32) (n uint32, err error) = kernel32.GetShortPathNameW
 //sys	CreateFileMapping(fhandle Handle, sa *SecurityAttributes, prot uint32, maxSizeHigh uint32, maxSizeLow uint32, name *uint16) (handle Handle, err error) = kernel32.CreateFileMappingW
 //sys	MapViewOfFile(handle Handle, access uint32, offsetHigh uint32, offsetLow uint32, length uintptr) (addr uintptr, err error)
 //sys	UnmapViewOfFile(addr uintptr) (err error)
@@ -182,8 +185,15 @@ func NewCallback(fn interface{}) uintptr
 //sys	TransmitFile(s Handle, handle Handle, bytesToWrite uint32, bytsPerSend uint32, overlapped *Overlapped, transmitFileBuf *TransmitFileBuffers, flags uint32) (err error) = mswsock.TransmitFile
 //sys	ReadDirectoryChanges(handle Handle, buf *byte, buflen uint32, watchSubTree bool, mask uint32, retlen *uint32, overlapped *Overlapped, completionRoutine uintptr) (err error) = kernel32.ReadDirectoryChangesW
 //sys	CertOpenSystemStore(hprov Handle, name *uint16) (store Handle, err error) = crypt32.CertOpenSystemStoreW
+//sys   CertOpenStore(storeProvider uintptr, msgAndCertEncodingType uint32, cryptProv uintptr, flags uint32, para uintptr) (handle Handle, err error) [failretval==InvalidHandle] = crypt32.CertOpenStore
 //sys	CertEnumCertificatesInStore(store Handle, prevContext *CertContext) (context *CertContext, err error) [failretval==nil] = crypt32.CertEnumCertificatesInStore
+//sys   CertAddCertificateContextToStore(store Handle, certContext *CertContext, addDisposition uint32, storeContext **CertContext) (err error) = crypt32.CertAddCertificateContextToStore
 //sys	CertCloseStore(store Handle, flags uint32) (err error) = crypt32.CertCloseStore
+//sys   CertGetCertificateChain(engine Handle, leaf *CertContext, time *Filetime, additionalStore Handle, para *CertChainPara, flags uint32, reserved uintptr, chainCtx **CertChainContext) (err error) = crypt32.CertGetCertificateChain
+//sys   CertFreeCertificateChain(ctx *CertChainContext) = crypt32.CertFreeCertificateChain
+//sys   CertCreateCertificateContext(certEncodingType uint32, certEncoded *byte, encodedLen uint32) (context *CertContext, err error) [failretval==nil] = crypt32.CertCreateCertificateContext
+//sys   CertFreeCertificateContext(ctx *CertContext) (err error) = crypt32.CertFreeCertificateContext
+//sys   CertVerifyCertificateChainPolicy(policyOID uintptr, chain *CertChainContext, para *CertChainPolicyPara, status *CertChainPolicyStatus) (err error) = crypt32.CertVerifyCertificateChainPolicy
 //sys	RegOpenKeyEx(key Handle, subkey *uint16, options uint32, desiredAccess uint32, result *Handle) (regerrno error) = advapi32.RegOpenKeyExW
 //sys	RegCloseKey(key Handle) (regerrno error) = advapi32.RegCloseKey
 //sys	RegQueryInfoKey(key Handle, class *uint16, classLen *uint32, reserved *uint32, subkeysLen *uint32, maxSubkeyLen *uint32, maxClassLen *uint32, valuesLen *uint32, maxValueNameLen *uint32, maxValueLen *uint32, saLen *uint32, lastWriteTime *Filetime) (regerrno error) = advapi32.RegQueryInfoKeyW
@@ -601,10 +611,14 @@ func WSASendto(s Handle, bufs *WSABuf, bufcnt uint32, sent *uint32, flags uint32
 }
 
 // Invented structures to support what package os expects.
-type Rusage struct{}
+type Rusage struct {
+	CreationTime Filetime
+	ExitTime     Filetime
+	KernelTime   Filetime
+	UserTime     Filetime
+}
 
 type WaitStatus struct {
-	Status   uint32
 	ExitCode uint32
 }
 
@@ -612,7 +626,7 @@ func (w WaitStatus) Exited() bool { return true }
 
 func (w WaitStatus) ExitStatus() int { return int(w.ExitCode) }
 
-func (w WaitStatus) Signal() int { return -1 }
+func (w WaitStatus) Signal() Signal { return -1 }
 
 func (w WaitStatus) CoreDump() bool { return false }
 
@@ -620,11 +634,18 @@ func (w WaitStatus) Stopped() bool { return false }
 
 func (w WaitStatus) Continued() bool { return false }
 
-func (w WaitStatus) StopSignal() int { return -1 }
+func (w WaitStatus) StopSignal() Signal { return -1 }
 
 func (w WaitStatus) Signaled() bool { return false }
 
 func (w WaitStatus) TrapCause() int { return -1 }
+
+// Timespec is an invented structure on Windows, but here for
+// consistency with the syscall package for other operating systems.
+type Timespec struct {
+	Sec  int64
+	Nsec int64
+}
 
 // TODO(brainman): fix all needed for net
 
@@ -640,11 +661,6 @@ type Linger struct {
 	Linger int32
 }
 
-const (
-	IP_ADD_MEMBERSHIP  = 0xc
-	IP_DROP_MEMBERSHIP = 0xd
-)
-
 type IPMreq struct {
 	Multiaddr [4]byte /* in_addr */
 	Interface [4]byte /* in_addr */
@@ -655,7 +671,11 @@ type IPv6Mreq struct {
 	Interface uint32
 }
 
+func GetsockoptInt(fd Handle, level, opt int) (int, error)              { return -1, EWINDOWS }
 func SetsockoptLinger(fd Handle, level, opt int, l *Linger) (err error) { return EWINDOWS }
+func SetsockoptInet4Addr(fd Handle, level, opt int, value [4]byte) (err error) {
+	return Setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(&value[0])), 4)
+}
 func SetsockoptIPMreq(fd Handle, level, opt int, mreq *IPMreq) (err error) {
 	return Setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(mreq)), int32(unsafe.Sizeof(*mreq)))
 }
@@ -681,3 +701,17 @@ func Geteuid() (euid int)                { return -1 }
 func Getgid() (gid int)                  { return -1 }
 func Getegid() (egid int)                { return -1 }
 func Getgroups() (gids []int, err error) { return nil, EWINDOWS }
+
+type Signal int
+
+func (s Signal) Signal() {}
+
+func (s Signal) String() string {
+	if 0 <= s && int(s) < len(signals) {
+		str := signals[s]
+		if str != "" {
+			return str
+		}
+	}
+	return "signal " + itoa(int(s))
+}

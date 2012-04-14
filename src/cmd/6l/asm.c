@@ -37,8 +37,6 @@
 #include	"../ld/macho.h"
 #include	"../ld/pe.h"
 
-#define	Dbufslop	100
-
 #define PADDR(a)	((uint32)(a) & ~0x80000000)
 
 char linuxdynld[] = "/lib64/ld-linux-x86-64.so.2";
@@ -97,6 +95,8 @@ enum {
 	ElfStrGnuVersion,
 	ElfStrGnuVersionR,
 	ElfStrNoteNetbsdIdent,
+	ElfStrNoPtrData,
+	ElfStrNoPtrBss,
 	NElfStr
 };
 
@@ -114,6 +114,7 @@ needlib(char *name)
 	/* reuse hash code in symbol table */
 	p = smprint(".elfload.%s", name);
 	s = lookup(p, 0);
+	free(p);
 	if(s->type == 0) {
 		s->type = 100;	// avoid SDATA, etc.
 		return 1;
@@ -570,8 +571,10 @@ doelf(void)
 
 	elfstr[ElfStrEmpty] = addstring(shstrtab, "");
 	elfstr[ElfStrText] = addstring(shstrtab, ".text");
+	elfstr[ElfStrNoPtrData] = addstring(shstrtab, ".noptrdata");
 	elfstr[ElfStrData] = addstring(shstrtab, ".data");
 	elfstr[ElfStrBss] = addstring(shstrtab, ".bss");
+	elfstr[ElfStrNoPtrBss] = addstring(shstrtab, ".noptrbss");
 	if(HEADTYPE == Hnetbsd)
 		elfstr[ElfStrNoteNetbsdIdent] = addstring(shstrtab, ".note.netbsd.ident");
 	addstring(shstrtab, ".elfdata");
@@ -1167,7 +1170,10 @@ genasmsym(void (*put)(Sym*, char*, int, vlong, vlong, int, Sym*))
 		switch(s->type&~SSUB) {
 		case SCONST:
 		case SRODATA:
+		case SSYMTAB:
+		case SPCLNTAB:
 		case SDATA:
+		case SNOPTRDATA:
 		case SELFROSECT:
 		case SMACHOGOT:
 		case STYPE:
@@ -1180,8 +1186,11 @@ genasmsym(void (*put)(Sym*, char*, int, vlong, vlong, int, Sym*))
 			continue;
 
 		case SBSS:
+		case SNOPTRBSS:
 			if(!s->reachable)
 				continue;
+			if(s->np > 0)
+				diag("%s should not be bss (size=%d type=%d special=%d)", s->name, (int)s->np, s->type, s->special);
 			put(s, s->name, 'B', symaddr(s), s->size, s->version, s->gotype);
 			continue;
 

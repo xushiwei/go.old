@@ -48,7 +48,7 @@ runtime·goenvs(void)
 }
 
 void
-runtime·initsig(int32)
+runtime·initsig(void)
 {
 }
 
@@ -87,7 +87,7 @@ runtime·nanotime(void)
 	// The naïve implementation (without the cached
 	// file descriptor) is roughly four times slower
 	// in 9vx on a 2.16 GHz Intel Core 2 Duo.
-	
+
 	if(fd < 0 && (fd = runtime·open((byte*)"/dev/bintime", OREAD|OCEXEC)) < 0)
 		return 0;
 	if(runtime·pread(fd, b, sizeof b, 0) != sizeof b)
@@ -234,4 +234,36 @@ int32
 runtime·write(int32 fd, void *buf, int32 nbytes)
 {
 	return runtime·pwrite(fd, buf, nbytes, -1LL);
+}
+
+uintptr
+runtime·memlimit(void)
+{
+	return 0;
+}
+
+void
+runtime·setprof(bool on)
+{
+	USED(on);
+}
+
+static int8 badcallback[] = "runtime: cgo callback on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badcallback(void)
+{
+	runtime·pwrite(2, badcallback, sizeof badcallback - 1, -1LL);
+}
+
+static int8 badsignal[] = "runtime: signal received on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badsignal(void)
+{
+	runtime·pwrite(2, badsignal, sizeof badsignal - 1, -1LL);
 }

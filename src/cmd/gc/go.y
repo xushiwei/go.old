@@ -205,7 +205,15 @@ import_stmt:
 		my->lastlineno = $1;
 		my->block = 1;	// at top level
 	}
-
+|	import_here import_there
+	{
+		// When an invalid import path is passed to importfile,
+		// it calls yyerror and then sets up a fake import with
+		// no package statement. This allows us to test more
+		// than one invalid import statement in a single file.
+		if(nerrors == 0)
+			fatal("phase error in import");
+	}
 
 import_stmt_list:
 	import_stmt
@@ -423,7 +431,7 @@ simple_stmt:
 				yyerror("expr.(type) must be alone in list");
 			if($1->next != nil)
 				yyerror("argument count mismatch: %d = %d", count($1), 1);
-			else if($1->n->op != ONAME && $1->n->op != OTYPE && $1->n->op != ONONAME)
+			else if(($1->n->op != ONAME && $1->n->op != OTYPE && $1->n->op != ONONAME) || isblank($1->n))
 				yyerror("invalid variable name %N in type switch", $1->n);
 			else
 				$$->left = dclname($1->n->sym);  // it's a colas, so must not re-use an oldname.
@@ -987,7 +995,10 @@ lbrace:
 new_name:
 	sym
 	{
-		$$ = newname($1);
+		if($1 == S)
+			$$ = N;
+		else
+			$$ = newname($1);
 	}
 
 dcl_name:
@@ -1418,6 +1429,20 @@ structdcl:
 	{
 		NodeList *l;
 
+		Node *n;
+		l = $1;
+		if(l != nil && l->next == nil && l->n == nil) {
+			// ? symbol, during import
+			n = $2;
+			if(n->op == OIND)
+				n = n->left;
+			n = embedded(n->sym);
+			n->right = $2;
+			n->val = $3;
+			$$ = list1(n);
+			break;
+		}
+
 		for(l=$1; l; l=l->next) {
 			l->n = nod(ODCLFIELD, l->n, $2);
 			l->n->val = $3;
@@ -1618,9 +1643,9 @@ non_dcl_stmt:
 	{
 		$$ = nod(ORETURN, N, N);
 		$$->list = $2;
-		if($$->list == nil) {
+		if($$->list == nil && curfn != N) {
 			NodeList *l;
-			
+
 			for(l=curfn->dcl; l; l=l->next) {
 				if(l->n->class == PPARAM)
 					continue;
@@ -1953,6 +1978,10 @@ hidden_interfacedcl:
 	{
 		$$ = nod(ODCLFIELD, newname($1), typenod(functype(fakethis(), $3, $5)));
 	}
+|	hidden_type
+	{
+		$$ = nod(ODCLFIELD, N, typenod($1));
+	}
 
 ohidden_funres:
 	{
@@ -2007,7 +2036,7 @@ hidden_constant:
 	{
 		if($2->val.ctype == CTRUNE && $4->val.ctype == CTINT) {
 			$$ = $2;
-			mpaddfixfix($2->val.u.xval, $4->val.u.xval);
+			mpaddfixfix($2->val.u.xval, $4->val.u.xval, 0);
 			break;
 		}
 		$$ = nodcplxlit($2->val, $4->val);

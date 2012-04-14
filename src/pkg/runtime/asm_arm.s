@@ -74,6 +74,10 @@ TEXT runtime·breakpoint(SB),7,$0
 	// no breakpoint yet; let program exit
 	RET
 
+TEXT runtime·asminit(SB),7,$0
+	// No per-thread init.
+	RET
+
 /*
  *  go-routine
  */
@@ -265,6 +269,16 @@ TEXT runtime·getcallersp(SB),7,$-4
 TEXT runtime·emptyfunc(SB),0,$0
 	RET
 
+// int64 runtime·cputicks(), so really
+// void runtime·cputicks(int64 *ticks)
+// stubbed: return int64(0)
+TEXT runtime·cputicks(SB),7,$0
+	MOVW    0(FP), R1
+	MOVW	$0, R0
+	MOVW    R0, 0(R1)
+	MOVW    R0, 4(R1)
+	RET
+
 TEXT runtime·abort(SB),7,$-4
 	MOVW	$0, R0
 	MOVW	(R0), R1
@@ -277,7 +291,7 @@ TEXT runtime·abort(SB),7,$-4
 //	}else
 //		return 0;
 //
-// To implement runtime·cas in ../$GOOS/arm/sys.s
+// To implement runtime·cas in sys_$GOOS_arm.s
 // using the native instructions, use:
 //
 //	TEXT runtime·cas(SB),7,$0
@@ -298,4 +312,11 @@ casl:
 	RET
 casfail:
 	MOVW	$0, R0
+	RET
+
+TEXT runtime·stackguard(SB),7,$0
+	MOVW	R13, R1
+	MOVW	g_stackguard(g), R2
+	MOVW	R1, sp+0(FP)
+	MOVW	R2, limit+4(FP)
 	RET

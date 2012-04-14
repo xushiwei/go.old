@@ -9,6 +9,10 @@
 
 extern SigTab runtime·sigtab[];
 
+static Sigset sigset_all = ~(Sigset)0;
+static Sigset sigset_none;
+static Sigset sigset_prof = 1<<(SIGPROF-1);
+
 static void
 unimplemented(int8 *name)
 {
@@ -20,7 +24,14 @@ unimplemented(int8 *name)
 int32
 runtime·semasleep(int64 ns)
 {
-	return runtime·mach_semacquire(m->waitsema, ns);
+	int32 v;
+
+	if(m->profilehz > 0)
+		runtime·setprof(false);
+	v = runtime·mach_semacquire(m->waitsema, ns);
+	if(m->profilehz > 0)
+		runtime·setprof(true);
+	return v;
 }
 
 void
@@ -39,7 +50,7 @@ runtime·semacreate(void)
 void
 runtime·osinit(void)
 {
-	// Register our thread-creation callback (see {amd64,386}/sys.s)
+	// Register our thread-creation callback (see sys_darwin_{amd64,386}.s)
 	// but only if we're not using cgo.  If we are using cgo we need
 	// to let the C pthread libary install its own thread-creation callback.
 	if(!runtime·iscgo)
@@ -70,13 +81,19 @@ void
 runtime·newosproc(M *m, G *g, void *stk, void (*fn)(void))
 {
 	int32 errno;
+	Sigset oset;
 
 	m->tls[0] = m->id;	// so 386 asm can find it
 	if(0){
 		runtime·printf("newosproc stk=%p m=%p g=%p fn=%p id=%d/%d ostk=%p\n",
 			stk, m, g, fn, m->id, m->tls[0], &m);
 	}
-	if((errno = runtime·bsdthread_create(stk, m, g, fn)) < 0) {
+
+	runtime·sigprocmask(SIG_SETMASK, &sigset_all, &oset);
+	errno = runtime·bsdthread_create(stk, m, g, fn);
+	runtime·sigprocmask(SIG_SETMASK, &oset, nil);
+
+	if(errno < 0) {
 		runtime·printf("runtime: failed to create new OS thread (have %d already; errno=%d)\n", runtime·mcount(), -errno);
 		runtime·throw("runtime.newosproc");
 	}
@@ -89,6 +106,11 @@ runtime·minit(void)
 	// Initialize signal handling.
 	m->gsignal = runtime·malg(32*1024);	// OS X wants >=8K, Linux >=2K
 	runtime·signalstack(m->gsignal->stackguard - StackGuard, 32*1024);
+
+	if(m->profilehz > 0)
+		runtime·sigprocmask(SIG_SETMASK, &sigset_none, nil);
+	else
+		runtime·sigprocmask(SIG_SETMASK, &sigset_prof, nil);
 }
 
 // Mach IPC, to get at semaphores
@@ -338,7 +360,7 @@ runtime·mach_semdestroy(uint32 sem)
 	}
 }
 
-// The other calls have simple system call traps in sys.s
+// The other calls have simple system call traps in sys_darwin_{amd64,386}.s
 int32 runtime·mach_semaphore_wait(uint32 sema);
 int32 runtime·mach_semaphore_timedwait(uint32 sema, uint32 sec, uint32 nsec);
 int32 runtime·mach_semaphore_signal(uint32 sema);
@@ -382,13 +404,19 @@ runtime·sigpanic(void)
 {
 	switch(g->sig) {
 	case SIGBUS:
-		if(g->sigcode0 == BUS_ADRERR && g->sigcode1 < 0x1000)
+		if(g->sigcode0 == BUS_ADRERR && g->sigcode1 < 0x1000) {
+			if(g->sigpc == 0)
+				runtime·panicstring("call of nil func value");
 			runtime·panicstring("invalid memory address or nil pointer dereference");
+		}
 		runtime·printf("unexpected fault address %p\n", g->sigcode1);
 		runtime·throw("fault");
 	case SIGSEGV:
-		if((g->sigcode0 == 0 || g->sigcode0 == SEGV_MAPERR || g->sigcode0 == SEGV_ACCERR) && g->sigcode1 < 0x1000)
+		if((g->sigcode0 == 0 || g->sigcode0 == SEGV_MAPERR || g->sigcode0 == SEGV_ACCERR) && g->sigcode1 < 0x1000) {
+			if(g->sigpc == 0)
+				runtime·panicstring("call of nil func value");
 			runtime·panicstring("invalid memory address or nil pointer dereference");
+		}
 		runtime·printf("unexpected fault address %p\n", g->sigcode1);
 		runtime·throw("fault");
 	case SIGFPE:
@@ -407,4 +435,65 @@ runtime·sigpanic(void)
 void
 runtime·osyield(void)
 {
+}
+
+uintptr
+runtime·memlimit(void)
+{
+	// NOTE(rsc): Could use getrlimit here,
+	// like on FreeBSD or Linux, but Darwin doesn't enforce
+	// ulimit -v, so it's unclear why we'd try to stay within
+	// the limit.
+	return 0;
+}
+
+// NOTE(rsc): On OS X, when the CPU profiling timer expires, the SIGPROF
+// signal is not guaranteed to be sent to the thread that was executing to
+// cause it to expire.  It can and often does go to a sleeping thread, which is
+// not interesting for our profile.  This is filed Apple Bug Report #9177434,
+// copied to http://code.google.com/p/go/source/detail?r=35b716c94225.
+// To work around this bug, we disable receipt of the profiling signal on
+// a thread while in blocking system calls.  This forces the kernel to deliver
+// the profiling signal to an executing thread.
+//
+// The workaround fails on OS X machines using a 64-bit Snow Leopard kernel.
+// In that configuration, the kernel appears to want to deliver SIGPROF to the
+// sleeping threads regardless of signal mask and, worse, does not deliver
+// the signal until the thread wakes up on its own.
+//
+// If necessary, we can switch to using ITIMER_REAL for OS X and handle
+// the kernel-generated SIGALRM by generating our own SIGALRMs to deliver
+// to all the running threads.  SIGALRM does not appear to be affected by
+// the 64-bit Snow Leopard bug.  However, as of this writing Mountain Lion
+// is in preview, making Snow Leopard two versions old, so it is unclear how
+// much effort we need to spend on one buggy kernel.
+
+// Control whether profiling signal can be delivered to this thread.
+void
+runtime·setprof(bool on)
+{
+	if(on)
+		runtime·sigprocmask(SIG_UNBLOCK, &sigset_prof, nil);
+	else
+		runtime·sigprocmask(SIG_BLOCK, &sigset_prof, nil);
+}
+
+static int8 badcallback[] = "runtime: cgo callback on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badcallback(void)
+{
+	runtime·write(2, badcallback, sizeof badcallback - 1);
+}
+
+static int8 badsignal[] = "runtime: signal received on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badsignal(void)
+{
+	runtime·write(2, badsignal, sizeof badsignal - 1);
 }

@@ -2,22 +2,26 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-include ../src/Make.inc
+RAWHTML=\
+	articles/defer_panic_recover.rawhtml\
+	articles/error_handling.rawhtml\
+	articles/slices_usage_and_internals.rawhtml\
+	articles/laws_of_reflection.rawhtml\
+	articles/c_go_cgo.rawhtml\
+	articles/concurrency_patterns.rawhtml\
+	articles/godoc_documenting_go_code.rawhtml\
+	articles/gobs_of_data.rawhtml\
+	articles/json_and_go.rawhtml\
+	articles/json_rpc_tale_of_interfaces.rawhtml\
+	articles/image_draw.rawhtml\
+	articles/image_package.rawhtml\
+	effective_go.rawhtml\
+	go1.rawhtml\
 
-TARG=tmpltohtml
-GOFILES=\
-	tmpltohtml.go\
+all: $(RAWHTML)
 
-HTML=\
-	articles/defer_panic_recover.html\
-	articles/error_handling.html\
-	effective_go.html\
-	go1.html\
-	go_tutorial.html\
+%.rawhtml: %.html
+	godoc -url /doc/$< >$@
 
-all: tmpltohtml $(HTML)
-
-%.html: %.tmpl tmpltohtml
-	./makehtml $*.tmpl
-
-include ../src/Make.cmd
+clean:
+	rm -f $(RAWHTML)

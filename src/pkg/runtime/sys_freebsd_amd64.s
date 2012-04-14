@@ -26,7 +26,7 @@ TEXT runtime·thr_new(SB),7,$0
 	RET
 
 TEXT runtime·thr_start(SB),7,$0
-	MOVQ	DI, R13	// m
+	MOVQ	DI, R13 // m
 
 	// set up FS to point at m->tls
 	LEAQ	m_tls(R13), DI
@@ -47,14 +47,14 @@ TEXT runtime·exit(SB),7,$-8
 	MOVL	8(SP), DI		// arg 1 exit status
 	MOVL	$1, AX
 	SYSCALL
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·exit1(SB),7,$-8
 	MOVQ	8(SP), DI		// arg 1 exit status
 	MOVL	$431, AX
 	SYSCALL
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·write(SB),7,$-8
@@ -62,6 +62,13 @@ TEXT runtime·write(SB),7,$-8
 	MOVQ	16(SP), SI		// arg 2 buf
 	MOVL	24(SP), DX		// arg 3 count
 	MOVL	$4, AX
+	SYSCALL
+	RET
+
+TEXT runtime·getrlimit(SB),7,$-8
+	MOVL	8(SP), DI
+	MOVQ	16(SP), SI
+	MOVL	$194, AX
 	SYSCALL
 	RET
 
@@ -122,18 +129,23 @@ TEXT runtime·sigaction(SB),7,$-8
 	MOVL	$416, AX
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigtramp(SB),7,$64
 	get_tls(BX)
 	
+	// check that m exists
+	MOVQ	m(BX), BP
+	CMPQ	BP, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
+
 	// save g
 	MOVQ	g(BX), R10
 	MOVQ	R10, 40(SP)
 	
 	// g = m->signal
-	MOVQ	m(BX), BP
 	MOVQ	m_gsignal(BP), BP
 	MOVQ	BP, g(BX)
 	
@@ -167,12 +179,7 @@ TEXT runtime·munmap(SB),7,$0
 	MOVL	$73, AX
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
-	RET
-
-TEXT runtime·notok(SB),7,$-8
-	MOVL	$0xf1, BP
-	MOVQ	BP, (BP)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigaltstack(SB),7,$-8
@@ -181,11 +188,23 @@ TEXT runtime·sigaltstack(SB),7,$-8
 	MOVQ	$53, AX
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-// TODO: Implement usleep
-TEXT runtime·usleep(SB),7,$0
+TEXT runtime·usleep(SB),7,$16
+	MOVL	$0, DX
+	MOVL	usec+0(FP), AX
+	MOVL	$1000000, CX
+	DIVL	CX
+	MOVQ	AX, 0(SP)		// tv_sec
+	MOVL	$1000, AX
+	MULL	DX
+	MOVQ	AX, 8(SP)		// tv_nsec
+
+	MOVQ	SP, DI			// arg 1 - rqtp
+	MOVQ	$0, SI			// arg 2 - rmtp
+	MOVL	$240, AX		// sys_nanosleep
+	SYSCALL
 	RET
 
 // set tls base to DI
@@ -197,5 +216,35 @@ TEXT runtime·settls(SB),7,$8
 	MOVQ	$165, AX	// sysarch
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
+	RET
+
+TEXT runtime·sysctl(SB),7,$0
+	MOVQ	8(SP), DI		// arg 1 - name
+	MOVL	16(SP), SI		// arg 2 - namelen
+	MOVQ	24(SP), DX		// arg 3 - oldp
+	MOVQ	32(SP), R10		// arg 4 - oldlenp
+	MOVQ	40(SP), R8		// arg 5 - newp
+	MOVQ	48(SP), R9		// arg 6 - newlen
+	MOVQ	$202, AX		// sys___sysctl
+	SYSCALL
+	JCC 3(PC)
+	NEGL	AX
+	RET
+	MOVL	$0, AX
+	RET
+
+TEXT runtime·osyield(SB),7,$-4
+	MOVL	$331, AX		// sys_sched_yield
+	SYSCALL
+	RET
+
+TEXT runtime·sigprocmask(SB),7,$0
+	MOVL	$3, DI			// arg 1 - how (SIG_SETMASK)
+	MOVQ	8(SP), SI		// arg 2 - set
+	MOVQ	16(SP), DX		// arg 3 - oset
+	MOVL	$340, AX		// sys_sigprocmask
+	SYSCALL
+	JAE	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 	RET

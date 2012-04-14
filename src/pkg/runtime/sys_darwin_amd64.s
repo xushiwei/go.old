@@ -18,7 +18,7 @@ TEXT runtime·exit(SB),7,$0
 	MOVL	8(SP), DI		// arg 1 exit status
 	MOVL	$(0x2000000+1), AX	// syscall entry
 	SYSCALL
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // Exit this OS thread (like pthread_exit, which eventually
@@ -27,7 +27,7 @@ TEXT runtime·exit1(SB),7,$0
 	MOVL	8(SP), DI		// arg 1 exit status
 	MOVL	$(0x2000000+361), AX	// syscall entry
 	SYSCALL
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·write(SB),7,$0
@@ -53,6 +53,16 @@ TEXT runtime·setitimer(SB), 7, $0
 	MOVQ	24(SP), DX
 	MOVL	$(0x2000000+83), AX	// syscall entry
 	SYSCALL
+	RET
+
+TEXT runtime·madvise(SB), 7, $0
+	MOVQ	8(SP), DI		// arg 1 addr
+	MOVQ	16(SP), SI		// arg 2 len
+	MOVL	24(SP), DX		// arg 3 advice
+	MOVL	$(0x2000000+75), AX	// syscall entry madvise
+	SYSCALL
+	JCC	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // func now() (sec int64, nsec int32)
@@ -82,6 +92,16 @@ TEXT runtime·nanotime(SB), 7, $32
 	ADDQ	DX, AX
 	RET
 
+TEXT runtime·sigprocmask(SB),7,$0
+	MOVL	8(SP), DI
+	MOVQ	16(SP), SI
+	MOVQ	24(SP), DX
+	MOVL	$(0x2000000+329), AX  // pthread_sigmask (on OS X, sigprocmask==entire process)
+	SYSCALL
+	JCC	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
+	RET
+
 TEXT runtime·sigaction(SB),7,$0
 	MOVL	8(SP), DI		// arg 1 sig
 	MOVQ	16(SP), SI		// arg 2 act
@@ -91,18 +111,23 @@ TEXT runtime·sigaction(SB),7,$0
 	MOVL	$(0x2000000+46), AX	// syscall entry
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigtramp(SB),7,$64
 	get_tls(BX)
+
+	// check that m exists
+	MOVQ	m(BX), BP
+	CMPQ	BP, $0
+	JNE	2(PC)
+	CALL	runtime·badsignal(SB)
 
 	// save g
 	MOVQ	g(BX), R10
 	MOVQ	R10, 48(SP)
 
 	// g = m->gsignal
-	MOVQ	m(BX), BP
 	MOVQ	m_gsignal(BP), BP
 	MOVQ	BP, g(BX)
 
@@ -144,12 +169,7 @@ TEXT runtime·munmap(SB),7,$0
 	MOVL	$(0x2000000+73), AX	// syscall entry
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
-	RET
-
-TEXT runtime·notok(SB),7,$0
-	MOVL	$0xf1, BP
-	MOVQ	BP, (BP)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·sigaltstack(SB),7,$0
@@ -158,7 +178,7 @@ TEXT runtime·sigaltstack(SB),7,$0
 	MOVQ	$(0x2000000+53), AX
 	SYSCALL
 	JCC	2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 TEXT runtime·usleep(SB),7,$16
@@ -175,7 +195,7 @@ TEXT runtime·usleep(SB),7,$16
 	MOVL	$0, DX
 	MOVL	$0, R10
 	MOVQ	SP, R8
-	MOVL	$(0x2000000+23), AX
+	MOVL	$(0x2000000+93), AX
 	SYSCALL
 	RET
 
@@ -246,7 +266,7 @@ TEXT runtime·bsdthread_register(SB),7,$0
 	MOVQ	$(0x2000000+366), AX	// bsdthread_register
 	SYSCALL
 	JCC 2(PC)
-	CALL	runtime·notok(SB)
+	MOVL	$0xf1, 0xf1  // crash
 	RET
 
 // Mach system calls use 0x1000000 instead of the BSD's 0x2000000.
@@ -317,8 +337,8 @@ TEXT runtime·mach_semaphore_signal_all(SB),7,$0
 // set tls base to DI
 TEXT runtime·settls(SB),7,$32
 	/*
-	* Same as in ../386/sys.s:/ugliness, different constant.
-	* See ../../../../libcgo/darwin_amd64.c for the derivation
+	* Same as in sys_darwin_386.s:/ugliness, different constant.
+	* See cgo/gcc_darwin_amd64.c for the derivation
 	* of the constant.
 	*/
 	SUBQ $0x8a0, DI

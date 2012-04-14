@@ -175,13 +175,19 @@ runtime·sigpanic(void)
 {
 	switch(g->sig) {
 	case SIGBUS:
-		if(g->sigcode0 == BUS_ADRERR && g->sigcode1 < 0x1000)
+		if(g->sigcode0 == BUS_ADRERR && g->sigcode1 < 0x1000) {
+			if(g->sigpc == 0)
+				runtime·panicstring("call of nil func value");
 			runtime·panicstring("invalid memory address or nil pointer dereference");
+		}
 		runtime·printf("unexpected fault address %p\n", g->sigcode1);
 		runtime·throw("fault");
 	case SIGSEGV:
-		if((g->sigcode0 == 0 || g->sigcode0 == SEGV_MAPERR || g->sigcode0 == SEGV_ACCERR) && g->sigcode1 < 0x1000)
+		if((g->sigcode0 == 0 || g->sigcode0 == SEGV_MAPERR || g->sigcode0 == SEGV_ACCERR) && g->sigcode1 < 0x1000) {
+			if(g->sigpc == 0)
+				runtime·panicstring("call of nil func value");
 			runtime·panicstring("invalid memory address or nil pointer dereference");
+		}
 		runtime·printf("unexpected fault address %p\n", g->sigcode1);
 		runtime·throw("fault");
 	case SIGFPE:
@@ -194,4 +200,36 @@ runtime·sigpanic(void)
 		runtime·panicstring("floating point error");
 	}
 	runtime·panicstring(runtime·sigtab[g->sig].name);
+}
+
+uintptr
+runtime·memlimit(void)
+{
+	return 0;
+}
+
+void
+runtime·setprof(bool on)
+{
+	USED(on);
+}
+
+static int8 badcallback[] = "runtime: cgo callback on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badcallback(void)
+{
+	runtime·write(2, badcallback, sizeof badcallback - 1);
+}
+
+static int8 badsignal[] = "runtime: signal received on thread not created by Go.\n";
+
+// This runs on a foreign stack, without an m or a g.  No stack split.
+#pragma textflag 7
+void
+runtime·badsignal(void)
+{
+	runtime·write(2, badsignal, sizeof badsignal - 1);
 }

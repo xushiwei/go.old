@@ -26,7 +26,7 @@ var (
 	// main operation modes
 	list        = flag.Bool("l", false, "list files whose formatting differs from gofmt's")
 	write       = flag.Bool("w", false, "write result to (source) file instead of stdout")
-	rewriteRule = flag.String("r", "", "rewrite rule (e.g., 'α[β:len(α)] -> α[β:]')")
+	rewriteRule = flag.String("r", "", "rewrite rule (e.g., 'a[b:len(a)] -> a[b:]')")
 	simplifyAST = flag.Bool("s", false, "simplify code")
 	doDiff      = flag.Bool("d", false, "display diffs instead of rewriting files")
 	allErrors   = flag.Bool("e", false, "print all (including spurious) errors")
@@ -41,11 +41,11 @@ var (
 )
 
 var (
-	fset        = token.NewFileSet()
+	fileSet     = token.NewFileSet() // per process FileSet
 	exitCode    = 0
 	rewrite     func(*ast.File) *ast.File
-	parserMode  uint
-	printerMode uint
+	parserMode  parser.Mode
+	printerMode printer.Mode
 )
 
 func report(err error) {
@@ -60,7 +60,7 @@ func usage() {
 }
 
 func initParserMode() {
-	parserMode = uint(0)
+	parserMode = parser.Mode(0)
 	if *comments {
 		parserMode |= parser.ParseComments
 	}
@@ -98,7 +98,7 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		return err
 	}
 
-	file, adjust, err := parse(filename, src, stdin)
+	file, adjust, err := parse(fileSet, filename, src, stdin)
 	if err != nil {
 		return err
 	}
@@ -111,14 +111,14 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		}
 	}
 
-	ast.SortImports(fset, file)
+	ast.SortImports(fileSet, file)
 
 	if *simplifyAST {
 		simplify(file)
 	}
 
 	var buf bytes.Buffer
-	err = (&printer.Config{printerMode, *tabWidth}).Fprint(&buf, fset, file)
+	err = (&printer.Config{Mode: printerMode, Tabwidth: *tabWidth}).Fprint(&buf, fileSet, file)
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func diff(b1, b2 []byte) (data []byte, err error) {
 
 // parse parses src, which was read from filename,
 // as a Go source file or statement list.
-func parse(filename string, src []byte, stdin bool) (*ast.File, func(orig, src []byte) []byte, error) {
+func parse(fset *token.FileSet, filename string, src []byte, stdin bool) (*ast.File, func(orig, src []byte) []byte, error) {
 	// Try as whole source file.
 	file, err := parser.ParseFile(fset, filename, src, parserMode)
 	if err == nil {

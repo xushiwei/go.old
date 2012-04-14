@@ -4,6 +4,7 @@
 
 #include <string.h> /* for strerror */
 #include <pthread.h>
+#include <signal.h>
 #include "libcgo.h"
 
 static void* threadentry(void*);
@@ -27,8 +28,8 @@ inittls(void)
 	 *
 	 * The linker and runtime hard-code these constant offsets
 	 * from %gs where we expect to find m and g.
-	 * Known to ../cmd/6l/obj.c:/8a0
-	 * and to ../pkg/runtime/darwin/amd64/sys.s:/8a0
+	 * Known to ../../../cmd/6l/obj.c:/8a0
+	 * and to ../sys_darwin_amd64.s:/8a0
 	 *
 	 * As disgusting as on the 386; same justification.
 	 */
@@ -90,14 +91,21 @@ void
 libcgo_sys_thread_start(ThreadStart *ts)
 {
 	pthread_attr_t attr;
+	sigset_t ign, oset;
 	pthread_t p;
 	size_t size;
 	int err;
+
+	sigfillset(&ign);
+	sigprocmask(SIG_SETMASK, &ign, &oset);
 
 	pthread_attr_init(&attr);
 	pthread_attr_getstacksize(&attr, &size);
 	ts->g->stackguard = size;
 	err = pthread_create(&p, &attr, threadentry, ts);
+
+	sigprocmask(SIG_SETMASK, &oset, nil);
+
 	if (err != 0) {
 		fprintf(stderr, "runtime/cgo: pthread_create failed: %s\n", strerror(err));
 		abort();

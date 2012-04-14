@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"go/ast"
-	"go/doc"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -17,7 +16,7 @@ import (
 	"strings"
 )
 
-func parse(name string, flags uint) *ast.File {
+func parse(name string, flags parser.Mode) *ast.File {
 	ast1, err := parser.ParseFile(fset, name, nil, flags)
 	if err != nil {
 		if list, ok := err.(scanner.ErrorList); ok {
@@ -79,7 +78,7 @@ func (f *File) ReadGo(name string) {
 			}
 			if cg != nil {
 				f.Preamble += fmt.Sprintf("#line %d %q\n", sourceLine(cg), name)
-				f.Preamble += doc.CommentText(cg) + "\n"
+				f.Preamble += cg.Text() + "\n"
 			}
 		}
 	}
@@ -147,6 +146,9 @@ func (f *File) saveRef(x interface{}, context string) {
 		if l, ok := sel.X.(*ast.Ident); ok && l.Name == "C" {
 			if context == "as2" {
 				context = "expr"
+			}
+			if context == "embed-type" {
+				error_(sel.Pos(), "cannot embed C type")
 			}
 			goname := sel.Sel.Name
 			if goname == "errno" {
@@ -233,7 +235,11 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 
 	// These are ordered and grouped to match ../../pkg/go/ast/ast.go
 	case *ast.Field:
-		f.walk(&n.Type, "type", visit)
+		if len(n.Names) == 0 && context == "field" {
+			f.walk(&n.Type, "embed-type", visit)
+		} else {
+			f.walk(&n.Type, "type", visit)
+		}
 	case *ast.FieldList:
 		for _, field := range n.List {
 			f.walk(field, context, visit)
@@ -290,9 +296,9 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 	case *ast.StructType:
 		f.walk(n.Fields, "field", visit)
 	case *ast.FuncType:
-		f.walk(n.Params, "field", visit)
+		f.walk(n.Params, "param", visit)
 		if n.Results != nil {
-			f.walk(n.Results, "field", visit)
+			f.walk(n.Results, "param", visit)
 		}
 	case *ast.InterfaceType:
 		f.walk(n.Methods, "field", visit)
@@ -380,7 +386,7 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 		f.walk(n.Specs, "spec", visit)
 	case *ast.FuncDecl:
 		if n.Recv != nil {
-			f.walk(n.Recv, "field", visit)
+			f.walk(n.Recv, "param", visit)
 		}
 		f.walk(n.Type, "type", visit)
 		if n.Body != nil {

@@ -80,7 +80,7 @@ func (p *Package) godefs(f *File, srcfile string) string {
 	// and xxx is a typedef for yyy, make C.yyy format as T.
 	for typ, def := range typedef {
 		if new := override[typ]; new != "" {
-			if id, ok := def.(*ast.Ident); ok {
+			if id, ok := def.Go.(*ast.Ident); ok {
 				override[id.Name] = new
 			}
 		}
@@ -109,7 +109,7 @@ func (p *Package) godefs(f *File, srcfile string) string {
 		}
 	}
 
-	printer.Fprint(&buf, fset, f.AST)
+	conf.Fprint(&buf, fset, f.AST)
 
 	return buf.String()
 }
@@ -268,6 +268,11 @@ func cdecl(name, typ string) string {
 		typ = typ[i:]
 	}
 	// X T -> T X
+	// Handle the special case: 'unsafe.Pointer' is 'void *'
+	if typ == "unsafe.Pointer" {
+		typ = "void"
+		name = "*" + name
+	}
 	return typ + "\t" + name
 }
 

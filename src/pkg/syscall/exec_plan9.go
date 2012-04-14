@@ -71,13 +71,13 @@ func StringSlicePtr(ss []string) []*byte {
 	return bb
 }
 
-// gbit16 reads a 16-bit numeric value from a 9P protocol message strored in b,
+// gbit16 reads a 16-bit numeric value from a 9P protocol message stored in b,
 // returning the value and the remaining slice of b.
 func gbit16(b []byte) (uint16, []byte) {
 	return uint16(b[0]) | uint16(b[1])<<8, b[2:]
 }
 
-// gstring reads a string from a 9P protocol message strored in b,
+// gstring reads a string from a 9P protocol message stored in b,
 // returning the value as a Go string and the remaining slice of b.
 func gstring(b []byte) (string, []byte) {
 	n, b := gbit16(b)
@@ -182,7 +182,10 @@ func forkAndExecInChild(argv0 *byte, argv []*byte, envv []envItem, dir *byte, at
 	)
 
 	// guard against side effects of shuffling fds below.
-	fd := append([]int(nil), attr.Files...)
+	fd := make([]int, len(attr.Files))
+	for i, ufd := range attr.Files {
+		fd[i] = int(ufd)
+	}
 
 	if envv != nil {
 		clearenv = RFCENVG
@@ -338,9 +341,9 @@ type envItem struct {
 }
 
 type ProcAttr struct {
-	Dir   string   // Current working directory.
-	Env   []string // Environment.
-	Files []int    // File descriptors.
+	Dir   string    // Current working directory.
+	Env   []string  // Environment.
+	Files []uintptr // File descriptors.
 	Sys   *SysProcAttr
 }
 
@@ -423,7 +426,7 @@ func forkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 	for _, fd := range openFds {
 		isReserved := false
 		for _, reservedFd := range attr.Files {
-			if fd == reservedFd {
+			if fd == int(reservedFd) {
 				isReserved = true
 				break
 			}
@@ -483,7 +486,7 @@ func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 }
 
 // StartProcess wraps ForkExec for package os.
-func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid, handle int, err error) {
+func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
 	pid, err = forkExec(argv0, argv, attr)
 	return pid, 0, err
 }

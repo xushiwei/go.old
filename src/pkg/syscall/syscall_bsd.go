@@ -12,7 +12,10 @@
 
 package syscall
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 /*
  * Pseudo-system calls
@@ -103,8 +106,8 @@ func (w WaitStatus) ExitStatus() int {
 
 func (w WaitStatus) Signaled() bool { return w&mask != stopped && w&mask != 0 }
 
-func (w WaitStatus) Signal() int {
-	sig := int(w & mask)
+func (w WaitStatus) Signal() Signal {
+	sig := Signal(w & mask)
 	if sig == stopped || sig == 0 {
 		return -1
 	}
@@ -113,15 +116,15 @@ func (w WaitStatus) Signal() int {
 
 func (w WaitStatus) CoreDump() bool { return w.Signaled() && w&core != 0 }
 
-func (w WaitStatus) Stopped() bool { return w&mask == stopped && w>>shift != SIGSTOP }
+func (w WaitStatus) Stopped() bool { return w&mask == stopped && Signal(w>>shift) != SIGSTOP }
 
-func (w WaitStatus) Continued() bool { return w&mask == stopped && w>>shift == SIGSTOP }
+func (w WaitStatus) Continued() bool { return w&mask == stopped && Signal(w>>shift) == SIGSTOP }
 
-func (w WaitStatus) StopSignal() int {
+func (w WaitStatus) StopSignal() Signal {
 	if !w.Stopped() {
 		return -1
 	}
-	return int(w>>shift) & 0xFF
+	return Signal(w>>shift) & 0xFF
 }
 
 func (w WaitStatus) TrapCause() int { return -1 }
@@ -554,7 +557,7 @@ func Sysctl(name string) (value string, err error) {
 		// Work around a bug that was fixed after OpenBSD 5.0.
 		// The length for kern.hostname and kern.domainname is always
 		// returned as 0 when a nil value is passed for oldp.
-		if OS == "openbsd" && (name == "kern.hostname" || name == "kern.domainname") {
+		if runtime.GOOS == "openbsd" && (name == "kern.hostname" || name == "kern.domainname") {
 			// MAXHOSTNAMELEN
 			n = 256
 		} else {

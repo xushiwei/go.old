@@ -64,6 +64,9 @@ cgen(Node *n, Node *res)
 		if(isslice(n->left->type))
 			n->addable = n->left->addable;
 		break;
+	case OITAB:
+		n->addable = n->left->addable;
+		break;
 	}
 
 	// if both are addressable, move
@@ -280,6 +283,20 @@ cgen(Node *n, Node *res)
 		regfree(&n1);
 		break;
 
+	case OITAB:
+		// itable of interface value
+		igen(nl, &n1, res);
+		n1.op = OREGISTER;	// was OINDREG
+		regalloc(&n2, n->type, &n1);
+		n1.op = OINDREG;
+		n1.type = n->type;
+		n1.xoffset = 0;
+		gmove(&n1, &n2);
+		gmove(&n2, res);
+		regfree(&n1);
+		regfree(&n2);
+		break;
+
 	case OLEN:
 		if(istype(nl->type, TMAP) || istype(nl->type, TCHAN)) {
 			// map has len in the first 32-bit word.
@@ -402,9 +419,9 @@ abop:	// asymmetric binary
 		regalloc(&n2, nr->type, N);
 		cgen(nr, &n2);
 	} else {
-		regalloc(&n2, nr->type, N);
+		regalloc(&n2, nr->type, res);
 		cgen(nr, &n2);
-		regalloc(&n1, nl->type, res);
+		regalloc(&n1, nl->type, N);
 		cgen(nl, &n1);
 	}
 	gins(a, &n2, &n1);
@@ -1193,7 +1210,7 @@ stkof(Node *n)
  * NB: character copy assumed little endian architecture
  */
 void
-sgen(Node *n, Node *res, int32 w)
+sgen(Node *n, Node *res, int64 w)
 {
 	Node dst, src, tmp, nend;
 	int32 c, odst, osrc;
@@ -1201,14 +1218,17 @@ sgen(Node *n, Node *res, int32 w)
 	Prog *p, *ploop;
 
 	if(debug['g']) {
-		print("\nsgen w=%d\n", w);
+		print("\nsgen w=%lld\n", w);
 		dump("r", n);
 		dump("res", res);
 	}
-	if(w < 0)
-		fatal("sgen copy %d", w);
+
 	if(n->ullman >= UINF && res->ullman >= UINF)
 		fatal("sgen UINF");
+
+	if(w < 0 || (int32)w != w)
+		fatal("sgen copy %lld", w);
+
 	if(n->type == T)
 		fatal("sgen: missing type");
 
@@ -1240,7 +1260,7 @@ sgen(Node *n, Node *res, int32 w)
 		break;
 	}
 	if(w%align)
-		fatal("sgen: unaligned size %d (align=%d) for %T", w, align, n->type);
+		fatal("sgen: unaligned size %lld (align=%d) for %T", w, align, n->type);
 	c = w / align;
 
 	// offset on the stack

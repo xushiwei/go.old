@@ -125,6 +125,9 @@ cgen(Node *n, Node *res)
 		if(isslice(n->left->type))
 			n->addable = n->left->addable;
 		break;
+	case OITAB:
+		n->addable = n->left->addable;
+		break;
 	}
 
 	if(complexop(n, res)) {
@@ -259,6 +262,14 @@ cgen(Node *n, Node *res)
 		gmove(&n1, res);
 		regfree(&n1);
 		break;
+	
+	case OITAB:
+		// interface table is first word of interface value
+		igen(nl, &n1, res);
+		n1.type = n->type;
+		gmove(&n1, res);
+		regfree(&n1);
+		break;
 
 	case OLEN:
 		if(istype(nl->type, TMAP) || istype(nl->type, TCHAN)) {
@@ -387,9 +398,9 @@ abop:	// asymmetric binary
 		regalloc(&n2, nr->type, N);
 		cgen(nr, &n2);
 	} else {
-		regalloc(&n2, nr->type, N);
+		regalloc(&n2, nr->type, res);
 		cgen(nr, &n2);
-		regalloc(&n1, nl->type, res);
+		regalloc(&n1, nl->type, N);
 		cgen(nl, &n1);
 	}
 	gins(a, &n2, &n1);
@@ -1023,13 +1034,13 @@ stkof(Node *n)
  *	memmove(&ns, &n, w);
  */
 void
-sgen(Node *n, Node *ns, int32 w)
+sgen(Node *n, Node *ns, int64 w)
 {
 	Node nodl, nodr, oldl, oldr, cx, oldcx, tmp;
 	int32 c, q, odst, osrc;
 
 	if(debug['g']) {
-		print("\nsgen w=%d\n", w);
+		print("\nsgen w=%lld\n", w);
 		dump("r", n);
 		dump("res", ns);
 	}
@@ -1038,7 +1049,7 @@ sgen(Node *n, Node *ns, int32 w)
 		fatal("sgen UINF");
 
 	if(w < 0)
-		fatal("sgen copy %d", w);
+		fatal("sgen copy %lld", w);
 
 	if(w == 16)
 		if(componentgen(n, ns))

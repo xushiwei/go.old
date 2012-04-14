@@ -20,6 +20,7 @@ var usageMessage = `Usage of go test:
   -c=false: compile but do not run the test binary
   -file=file_test.go: specify file to use for tests;
       use multiple times for multiple files
+  -p=n: build and test up to n packages in parallel
   -x=false: print command lines as they are executed
 
   // These flags can be passed with or without a "test." prefix: -v or -test.v.
@@ -39,14 +40,14 @@ var usageMessage = `Usage of go test:
 // usage prints a usage message and exits.
 func testUsage() {
 	fmt.Fprint(os.Stderr, usageMessage)
-	exitStatus = 2
+	setExitStatus(2)
 	exit()
 }
 
 // testFlagSpec defines a flag we know about.
 type testFlagSpec struct {
 	name       string
-	isBool     bool
+	boolVar    *bool
 	passToTest bool // pass to Test
 	multiOK    bool // OK to have multiple instances
 	present    bool // flag has been seen
@@ -55,9 +56,21 @@ type testFlagSpec struct {
 // testFlagDefn is the set of flags we process.
 var testFlagDefn = []*testFlagSpec{
 	// local.
-	{name: "c", isBool: true},
+	{name: "c", boolVar: &testC},
 	{name: "file", multiOK: true},
-	{name: "x", isBool: true},
+	{name: "i", boolVar: &testI},
+
+	// build flags.
+	{name: "a", boolVar: &buildA},
+	{name: "n", boolVar: &buildN},
+	{name: "p"},
+	{name: "x", boolVar: &buildX},
+	{name: "work", boolVar: &buildWork},
+	{name: "gcflags"},
+	{name: "ldflags"},
+	{name: "gccgoflags"},
+	{name: "tags"},
+	{name: "compiler"},
 
 	// passed to 6.out, adding a "test." prefix to the name if necessary: -v becomes -test.v.
 	{name: "bench", passToTest: true},
@@ -68,16 +81,16 @@ var testFlagDefn = []*testFlagSpec{
 	{name: "memprofilerate", passToTest: true},
 	{name: "parallel", passToTest: true},
 	{name: "run", passToTest: true},
-	{name: "short", isBool: true, passToTest: true},
+	{name: "short", boolVar: new(bool), passToTest: true},
 	{name: "timeout", passToTest: true},
-	{name: "v", isBool: true, passToTest: true},
+	{name: "v", boolVar: &testV, passToTest: true},
 }
 
 // testFlags processes the command line, grabbing -x and -c, rewriting known flags
 // to have "test" before them, and reading the command line for the 6.out.
 // Unfortunately for us, we need to do our own flag processing because go test
 // grabs some flags but otherwise its command line is just a holding place for
-// test.out's arguments.
+// pkg.test's arguments.
 // We allow known flags both before and after the package name list,
 // to allow both
 //	go test fmt -custom-flag-for-fmt-test
@@ -115,14 +128,28 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 			continue
 		}
 		switch f.name {
-		case "c":
-			setBoolFlag(&testC, value)
-		case "x":
-			setBoolFlag(&testX, value)
-		case "v":
-			setBoolFlag(&testV, value)
+		// bool flags.
+		case "a", "c", "i", "n", "x", "v", "work":
+			setBoolFlag(f.boolVar, value)
+		case "p":
+			setIntFlag(&buildP, value)
+		case "gcflags":
+			buildGcflags = strings.Fields(value)
+		case "ldflags":
+			buildLdflags = strings.Fields(value)
+		case "gccgoflags":
+			buildGccgoflags = strings.Fields(value)
+		case "tags":
+			buildContext.BuildTags = strings.Fields(value)
+		case "compiler":
+			buildCompiler{}.Set(value)
 		case "file":
 			testFiles = append(testFiles, value)
+		case "bench":
+			// record that we saw the flag; don't care about the value
+			testBench = true
+		case "timeout":
+			testTimeout = value
 		}
 		if extraWord {
 			i++
@@ -160,7 +187,7 @@ func testFlag(args []string, i int) (f *testFlagSpec, value string, extra bool) 
 	for _, f = range testFlagDefn {
 		if name == f.name {
 			// Booleans are special because they have modes -x, -x=true, -x=false.
-			if f.isBool {
+			if f.boolVar != nil {
 				if equals < 0 { // otherwise, it's been set and will be verified in setBoolFlag
 					value = "true"
 				} else {
@@ -192,6 +219,16 @@ func setBoolFlag(flag *bool, value string) {
 	x, err := strconv.ParseBool(value)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "go test: illegal bool flag value %s\n", value)
+		usage()
+	}
+	*flag = x
+}
+
+// setIntFlag sets the addressed integer to the value.
+func setIntFlag(flag *int, value string) {
+	x, err := strconv.Atoi(value)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go test: illegal int flag value %s\n", value)
 		usage()
 	}
 	*flag = x

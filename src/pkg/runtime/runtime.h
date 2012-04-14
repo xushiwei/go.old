@@ -168,8 +168,8 @@ struct	Gobuf
 };
 struct	G
 {
-	byte*	stackguard;	// cannot move - also known to linker, libmach, libcgo
-	byte*	stackbase;	// cannot move - also known to libmach, libcgo
+	byte*	stackguard;	// cannot move - also known to linker, libmach, runtime/cgo
+	byte*	stackbase;	// cannot move - also known to libmach, runtime/cgo
 	Defer*	defer;
 	Panic*	panic;
 	Gobuf	sched;
@@ -191,6 +191,8 @@ struct	G
 	M*	lockedm;
 	M*	idlem;
 	int32	sig;
+	int32	writenbuf;
+	byte*	writebuf;
 	uintptr	sigcode0;
 	uintptr	sigcode1;
 	uintptr	sigpc;
@@ -233,6 +235,7 @@ struct	M
 	FixAlloc	*stackalloc;
 	G*	lockedg;
 	G*	idleg;
+	uintptr	createstack[32];	// Stack that created this thread.
 	uint32	freglo[16];	// D[i] lsb and F[i]
 	uint32	freghi[16];	// D[i] msb and F[i+16]
 	uint32	fflag;		// floating point compare flags
@@ -266,11 +269,11 @@ struct	SigTab
 };
 enum
 {
-	SigCatch = 1<<0,
-	SigIgnore = 1<<1,
-	SigRestart = 1<<2,
-	SigQueue = 1<<3,
-	SigPanic = 1<<4,
+	SigNotify = 1<<0,	// let signal.Notify have signal, even if from kernel
+	SigKill = 1<<1,		// if signal.Notify doesn't take it, exit quietly
+	SigThrow = 1<<2,	// if signal.Notify doesn't take it, exit loudly
+	SigPanic = 1<<3,	// if the signal is from the kernel, panic
+	SigDefault = 1<<4,	// if the signal isn't explicitly requested, don't monitor it
 };
 
 // NOTE(rsc): keep in sync with extern.go:/type.Func.
@@ -358,12 +361,14 @@ enum {
 enum
 {
 	AMEM,
+	AMEM0,
 	AMEM8,
 	AMEM16,
 	AMEM32,
 	AMEM64,
 	AMEM128,
 	ANOEQ,
+	ANOEQ0,
 	ANOEQ8,
 	ANOEQ16,
 	ANOEQ32,
@@ -373,6 +378,10 @@ enum
 	AINTER,
 	ANILINTER,
 	ASLICE,
+	AFLOAT32,
+	AFLOAT64,
+	ACPLX64,
+	ACPLX128,
 	Amax
 };
 typedef	struct	Alg		Alg;
@@ -494,7 +503,8 @@ String  runtime·gostringn(byte*, int32);
 Slice	runtime·gobytes(byte*, int32);
 String	runtime·gostringnocopy(byte*);
 String	runtime·gostringw(uint16*);
-void	runtime·initsig(int32);
+void	runtime·initsig(void);
+void	runtime·sigenable(uint32 sig);
 int32	runtime·gotraceback(void);
 void	runtime·goroutineheader(G*);
 void	runtime·traceback(uint8 *pc, uint8 *sp, uint8 *lr, G* gp);
@@ -519,6 +529,7 @@ int32	runtime·atoi(byte*);
 void	runtime·newosproc(M *m, G *g, void *stk, void (*fn)(void));
 void	runtime·signalstack(byte*, int32);
 G*	runtime·malg(int32);
+void	runtime·asminit(void);
 void	runtime·minit(void);
 Func*	runtime·findfunc(uintptr);
 int32	runtime·funcline(Func*, uintptr);
@@ -536,6 +547,7 @@ bool	runtime·addfinalizer(void*, void(*fn)(void*), int32);
 void	runtime·runpanic(Panic*);
 void*	runtime·getcallersp(void*);
 int32	runtime·mcount(void);
+int32	runtime·gcount(void);
 void	runtime·mcall(void(*)(G*));
 uint32	runtime·fastrand1(void);
 
@@ -549,7 +561,6 @@ void	runtime·asmcgocall(void (*fn)(void*), void*);
 void	runtime·entersyscall(void);
 void	runtime·exitsyscall(void);
 G*	runtime·newproc1(byte*, byte*, int32, int32, void*);
-void	runtime·siginit(void);
 bool	runtime·sigsend(int32 sig);
 int32	runtime·callers(int32, uintptr*, int32);
 int32	runtime·gentraceback(byte*, byte*, byte*, G*, int32, uintptr*, int32);
@@ -560,6 +571,7 @@ void	runtime·sigprof(uint8 *pc, uint8 *sp, uint8 *lr, G *gp);
 void	runtime·resetcpuprofiler(int32);
 void	runtime·setcpuprofilerate(void(*)(uintptr*, int32), int32);
 void	runtime·usleep(uint32);
+int64	runtime·cputicks(void);
 
 #pragma	varargck	argpos	runtime·printf	1
 #pragma	varargck	type	"d"	int32
@@ -576,10 +588,9 @@ void	runtime·usleep(uint32);
 #pragma	varargck	type	"s"	uint8*
 #pragma	varargck	type	"S"	String
 
-// TODO(rsc): Remove. These are only temporary,
-// for the mark and sweep collector.
 void	runtime·stoptheworld(void);
 void	runtime·starttheworld(bool);
+extern uint32 runtime·worldsema;
 
 /*
  * mutual exclusion locks.  in the uncontended case,
@@ -664,9 +675,8 @@ void	runtime·panicslice(void);
 /*
  * runtime c-called (but written in Go)
  */
-void	runtime·newError(String, Eface*);
 void	runtime·printany(Eface);
-void	runtime·newTypeAssertionError(Type*, Type*, Type*, String*, String*, String*, String*, Eface*);
+void	runtime·newTypeAssertionError(String*, String*, String*, String*, Eface*);
 void	runtime·newErrorString(String, Eface*);
 void	runtime·fadd64c(uint64, uint64, uint64*);
 void	runtime·fsub64c(uint64, uint64, uint64*);
@@ -695,7 +705,6 @@ float64	runtime·ldexp(float64 d, int32 e);
 float64	runtime·modf(float64 d, float64 *ip);
 void	runtime·semacquire(uint32*);
 void	runtime·semrelease(uint32*);
-String	runtime·signame(int32 sig);
 int32	runtime·gomaxprocsfunc(int32 n);
 void	runtime·procyield(uint32);
 void	runtime·osyield(void);
@@ -718,3 +727,14 @@ bool	runtime·showframe(Func*);
 
 void	runtime·ifaceE2I(struct InterfaceType*, Eface, Iface*);
 
+uintptr	runtime·memlimit(void);
+
+// If appropriate, ask the operating system to control whether this
+// thread should receive profiling signals.  This is only necessary on OS X.
+// An operating system should not deliver a profiling signal to a
+// thread that is not actually executing (what good is that?), but that's
+// what OS X prefers to do.  When profiling is turned on, we mask
+// away the profiling signal when threads go to sleep, so that OS X
+// is forced to deliver the signal to a thread that's actually running.
+// This is a no-op on other systems.
+void	runtime·setprof(bool);

@@ -40,12 +40,14 @@ enum
 	// These values are known by runtime.
 	// The MEMx and NOEQx values must run in parallel.  See algtype.
 	AMEM		= 0,
+	AMEM0,
 	AMEM8,
 	AMEM16,
 	AMEM32,
 	AMEM64,
 	AMEM128,
 	ANOEQ,
+	ANOEQ0,
 	ANOEQ8,
 	ANOEQ16,
 	ANOEQ32,
@@ -55,6 +57,10 @@ enum
 	AINTER,
 	ANILINTER,
 	ASLICE,
+	AFLOAT32,
+	AFLOAT64,
+	ACPLX64,
+	ACPLX128,
 
 	BADWIDTH	= -1000000000,
 };
@@ -244,7 +250,7 @@ struct	Node
 	uchar	used;
 	uchar	isddd;
 	uchar	readonly;
-	uchar	implicit;	// don't show in printout
+	uchar	implicit;
 	uchar	addrtaken;	// address taken, even if not moved to heap
 	uchar	dupok;	// duplicate definitions ok (for func)
 
@@ -478,6 +484,7 @@ enum
 	ODDD,
 	ODDDARG,
 	OINLCALL,	// intermediary representation of an inlined call
+	OITAB,	// itable word of interface value
 
 	// for back ends
 	OCMP, ODEC, OEXTEND, OINC, OREGISTER, OINDREG,
@@ -757,6 +764,7 @@ EXTERN	Pkg*	gostringpkg;	// fake pkg for Go strings
 EXTERN	Pkg*	runtimepkg;	// package runtime
 EXTERN	Pkg*	stringpkg;	// fake package for C strings
 EXTERN	Pkg*	typepkg;	// fake package for runtime type info
+EXTERN	Pkg*	weaktypepkg;	// weak references to runtime type info
 EXTERN	Pkg*	unsafepkg;	// package unsafe
 EXTERN	Pkg*	phash[128];
 EXTERN	int	tptr;		// either TPTR32 or TPTR64
@@ -764,6 +772,7 @@ extern	char*	runtimeimport;
 extern	char*	unsafeimport;
 EXTERN	char*	myimportpath;
 EXTERN	Idir*	idirs;
+EXTERN	char*	localimport;
 
 EXTERN	Type*	types[NTYPE];
 EXTERN	Type*	idealstring;
@@ -947,7 +956,7 @@ NodeList*	variter(NodeList *vl, Node *t, NodeList *el);
 /*
  *	esc.c
  */
-void	escapes(void);
+void	escapes(NodeList*);
 
 /*
  *	export.c
@@ -996,6 +1005,7 @@ Sym*	renameinit(void);
  */
 void	caninl(Node *fn);
 void	inlcalls(Node *fn);
+void	typecheckinl(Node *fn);
 
 /*
  *	lex.c
@@ -1041,7 +1051,7 @@ void	mpsubfltflt(Mpflt *a, Mpflt *b);
 /*
  *	mparith2.c
  */
-void	mpaddfixfix(Mpint *a, Mpint *b);
+void	mpaddfixfix(Mpint *a, Mpint *b, int);
 void	mpandfixfix(Mpint *a, Mpint *b);
 void	mpandnotfixfix(Mpint *a, Mpint *b);
 void	mpdivfract(Mpint *a, Mpint *b);
@@ -1086,6 +1096,11 @@ void	ieeedtod(uint64 *ieee, double native);
 Sym*	stringsym(char*, int);
 
 /*
+ *	order.c
+ */
+void	order(Node *fn);
+
+/*
  *	range.c
  */
 void	typecheckrange(Node *n);
@@ -1121,6 +1136,7 @@ int	stataddr(Node *nam, Node *n);
  */
 Node*	adddot(Node *n);
 int	adddot1(Sym *s, Type *t, int d, Type **save, int ignorecase);
+void	addinit(Node**, NodeList*);
 Type*	aindex(Node *b, Type *t);
 int	algtype(Type *t);
 int	algtype1(Type *t, Type **bad);
@@ -1132,12 +1148,13 @@ int	brcom(int a);
 int	brrev(int a);
 NodeList*	concat(NodeList *a, NodeList *b);
 int	convertop(Type *src, Type *dst, char **why);
+Node*	copyexpr(Node*, Type*, NodeList**);
 int	count(NodeList *l);
 int	cplxsubtype(int et);
 int	eqtype(Type *t1, Type *t2);
 int	eqtypenoname(Type *t1, Type *t2);
 void	errorexit(void);
-void	expandmeth(Sym *s, Type *t);
+void	expandmeth(Type *t);
 void	fatal(char *fmt, ...);
 void	flusherrors(void);
 void	frame(int context);
@@ -1155,7 +1172,9 @@ Type*	getthisx(Type *t);
 int	implements(Type *t, Type *iface, Type **missing, Type **have, int *ptr);
 void	importdot(Pkg *opkg, Node *pack);
 int	is64(Type *t);
+int	isbadimport(Strlit *s);
 int	isblank(Node *n);
+int	isblanksym(Sym *s);
 int	isfixedarray(Type *t);
 int	isideal(Type *t);
 int	isinter(Type *t);
@@ -1173,7 +1192,7 @@ NodeList*	listtreecopy(NodeList *l);
 Sym*	lookup(char *name);
 void*	mal(int32 n);
 Type*	maptype(Type *key, Type *val);
-Type*	methtype(Type *t);
+Type*	methtype(Type *t, int mustname);
 Pkg*	mkpkg(Strlit *path);
 Sym*	ngotype(Node *n);
 int	noconv(Type *t1, Type *t2);

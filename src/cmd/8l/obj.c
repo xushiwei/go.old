@@ -87,6 +87,7 @@ void
 main(int argc, char *argv[])
 {
 	int c;
+	char *name, *val;
 
 	Binit(&bso, 1, OWRITE);
 	listinit();
@@ -98,6 +99,7 @@ main(int argc, char *argv[])
 	INITDAT = -1;
 	INITRND = -1;
 	INITENTRY = 0;
+	nuxiinit();
 
 	ARGBEGIN {
 	default:
@@ -137,6 +139,11 @@ main(int argc, char *argv[])
 	case 'V':
 		print("%cl version %s\n", thechar, getgoversion());
 		errorexit();
+	case 'X':
+		name = EARGF(usage());
+		val = EARGF(usage());
+		addstrdata(name, val);
+		break;
 	} ARGEND
 
 	if(argc != 1)
@@ -213,7 +220,7 @@ main(int argc, char *argv[])
 	case Hdarwin:	/* apple MACH */
 		/*
 		 * OS X system constant - offset from %gs to our TLS.
-		 * Explained in ../../libcgo/darwin_386.c.
+		 * Explained in ../../pkg/runtime/cgo/gcc_darwin_386.c.
 		 */
 		tlsoffset = 0x468;
 		machoinit();
@@ -232,8 +239,8 @@ main(int argc, char *argv[])
 		/*
 		 * ELF uses TLS offsets negative from %gs.
 		 * Translate 0(GS) and 4(GS) into -8(GS) and -4(GS).
-		 * Also known to ../../pkg/runtime/linux/386/sys.s
-		 * and ../../libcgo/linux_386.c.
+		 * Also known to ../../pkg/runtime/sys_linux_386.s
+		 * and ../../pkg/runtime/cgo/gcc_linux_386.c.
 		 */
 		tlsoffset = -8;
 		elfinit();
@@ -275,7 +282,6 @@ main(int argc, char *argv[])
 	zprg.to = zprg.from;
 
 	pcstr = "%.6ux ";
-	nuxiinit();
 	histgen = 0;
 	pc = 0;
 	dtype = 4;
@@ -557,7 +563,7 @@ loop:
 			s->type = SBSS;
 			s->size = 0;
 		}
-		if(s->type != SBSS && !s->dupok) {
+		if(s->type != SBSS && s->type != SNOPTRBSS && !s->dupok) {
 			diag("%s: redefinition: %s in %s",
 				pn, s->name, TNAME);
 			s->type = SBSS;
@@ -569,6 +575,8 @@ loop:
 			s->dupok = 1;
 		if(p->from.scale & RODATA)
 			s->type = SRODATA;
+		else if(p->from.scale & NOPTR)
+			s->type = SNOPTRBSS;
 		goto loop;
 
 	case ADATA:

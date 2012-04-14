@@ -7,6 +7,24 @@
 // saves a copy of the body. Then inlcalls walks each function body to
 // expand calls to inlinable functions.
 //
+// The debug['l'] flag controls the agressiveness. Note that main() swaps level 0 and 1,
+// making 1 the default and -l disable.  -ll and more is useful to flush out bugs.
+// These additional levels (beyond -l) may be buggy and are not supported.
+//      0: disabled
+//      1: 40-nodes leaf functions, oneliners, lazy typechecking (default)
+//      2: early typechecking of all imported bodies 
+//      3: 
+//      4: allow non-leaf functions , (breaks runtime.Caller)
+//      5: transitive inlining
+//
+//  At some point this may get another default and become switch-offable with -N.
+//
+//  The debug['m'] flag enables diagnostic output.  a single -m is useful for verifying
+//  which calls get inlined or not, more is for debugging, and may go away at any point.
+//
+// TODO:
+//   - inline functions with ... args
+//   - handle T.meth(f()) with func f() (t T, arg, arg, )
 
 #include <u.h>
 #include <libc.h>
@@ -15,8 +33,8 @@
 // Used by caninl.
 static Node*	inlcopy(Node *n);
 static NodeList* inlcopylist(NodeList *ll);
-static int	ishairy(Node *n);
-static int	ishairylist(NodeList *ll); 
+static int	ishairy(Node *n, int *budget);
+static int	ishairylist(NodeList *ll, int *budget); 
 
 // Used by inlcalls
 static void	inlnodelist(NodeList *l);
@@ -26,7 +44,7 @@ static Node*	inlvar(Node *n);
 static Node*	retvar(Type *n, int i);
 static Node*	newlabel(void);
 static Node*	inlsubst(Node *n);
-static NodeList* inlsubstlist(NodeList *ll);
+static NodeList* inlsubstlist(NodeList *l);
 
 static void	setlno(Node*, int);
 
@@ -35,6 +53,63 @@ static Node *inlfn;		// function currently being inlined
 static Node *inlretlabel;	// target of the goto substituted in place of a return
 static NodeList *inlretvars;	// temp out variables
 
+// Get the function's package.  For ordinary functions it's on the ->sym, but for imported methods
+// the ->sym can be re-used in the local package, so peel it off the receiver's type.
+static Pkg*
+fnpkg(Node *fn)
+{
+	Type *rcvr;
+	
+	if(fn->type->thistuple) {
+		// method
+		rcvr = getthisx(fn->type)->type->type;
+		if(isptr[rcvr->etype])
+			rcvr = rcvr->type;
+		if(!rcvr->sym)
+			fatal("receiver with no sym: [%S] %lN  (%T)", fn->sym, fn, rcvr);
+		return rcvr->sym->pkg;
+	}
+	// non-method
+	return fn->sym->pkg;
+}
+
+// Lazy typechecking of imported bodies.  For local functions, caninl will set ->typecheck
+// because they're a copy of an already checked body. 
+void
+typecheckinl(Node *fn)
+{
+	Node *savefn;
+	Pkg *pkg;
+	int save_safemode, lno;
+
+	if(fn->typecheck)
+		return;
+
+	lno = setlineno(fn);
+
+	if (debug['m']>2)
+		print("typecheck import [%S] %lN { %#H }\n", fn->sym, fn, fn->inl);
+
+	// typecheckinl is only used for imported functions;
+	// their bodies may refer to unsafe as long as the package
+	// was marked safe during import (which was checked then).
+	pkg = fnpkg(fn);
+	if (pkg == localpkg || pkg == nil)
+		fatal("typecheckinl on local function %lN", fn);
+
+	save_safemode = safemode;
+	safemode = 0;
+
+	savefn = curfn;
+	curfn = fn;
+	typechecklist(fn->inl, Etop);
+	fn->typecheck = 1;
+	curfn = savefn;
+
+	safemode = save_safemode;
+
+	lineno = lno;
+}
 
 // Caninl determines whether fn is inlineable. Currently that means:
 // fn is exactly 1 statement, either a return or an assignment, and
@@ -45,34 +120,24 @@ caninl(Node *fn)
 {
 	Node *savefn;
 	Type *t;
+	int budget;
 
 	if(fn->op != ODCLFUNC)
 		fatal("caninl %N", fn);
 	if(!fn->nname)
 		fatal("caninl no nname %+N", fn);
 
-	// exactly 1 statement
-	if(fn->nbody == nil || fn->nbody->next != nil)
+	// If fn has no body (is defined outside of Go), cannot inline it.
+	if(fn->nbody == nil)
 		return;
-
-	// the single statement should be a return or an assignment.
-	switch(fn->nbody->n->op) {
-	default:
-		return;
-	case ORETURN:
-	case OAS:
-	case OAS2:
-	case OEMPTY:
-		break;
-	}
 
 	// can't handle ... args yet
 	for(t=fn->type->type->down->down->type; t; t=t->down)
 		if(t->isddd)
 			return;
 
-	// TODO Anything non-trivial
-	if(ishairy(fn))
+	budget = 40;  // allowed hairyness
+	if(ishairylist(fn->nbody, &budget))
 		return;
 
 	savefn = curfn;
@@ -80,53 +145,83 @@ caninl(Node *fn)
 
 	fn->nname->inl = fn->nbody;
 	fn->nbody = inlcopylist(fn->nname->inl);
+	// nbody will have been typechecked, so we can set this:
+	fn->typecheck = 1;
 
 	// hack, TODO, check for better way to link method nodes back to the thing with the ->inl
 	// this is so export can find the body of a method
 	fn->type->nname = fn->nname;
 
-	if(debug['l']>1)
+	if(debug['m'] > 1)
 		print("%L: can inline %#N as: %#T { %#H }\n", fn->lineno, fn->nname, fn->type, fn->nname->inl);
+	else if(debug['m'])
+		print("%L: can inline %N\n", fn->lineno, fn->nname);
 
 	curfn = savefn;
 }
 
 // Look for anything we want to punt on.
 static int
-ishairylist(NodeList *ll)
+ishairylist(NodeList *ll, int* budget)
 {
 	for(;ll;ll=ll->next)
-		if(ishairy(ll->n))
+		if(ishairy(ll->n, budget))
 			return 1;
 	return 0;
 }
 
 static int
-ishairy(Node *n)
+ishairy(Node *n, int *budget)
 {
 	if(!n)
 		return 0;
 
+	// Things that are too hairy, irrespective of the budget
 	switch(n->op) {
-	case OPROC:
-	case ODEFER:
 	case OCALL:
 	case OCALLFUNC:
 	case OCALLINTER:
 	case OCALLMETH:
+	case OPANIC:
+	case ORECOVER:
+		if(debug['l'] < 4)
+			return 1;
+		break;
+
 	case OCLOSURE:
+	case ORANGE:
+	case OFOR:
+	case OSELECT:
+	case OSWITCH:
+	case OPROC:
+	case ODEFER:
+	case ODCL:	// declares locals as globals b/c of @"". qualification
+	case ODCLTYPE:  // can't print yet
+	case ODCLCONST:  // can't print yet
 		return 1;
+
+		break;
+	case OAS:
+		// x = <N> zero initializing assignments aren't representible in export yet.
+		// alternatively we may just skip them in printing and hope their DCL printed
+		// as a var will regenerate it
+		if(n->right == N)
+			return 1;
+		break;
 	}
 
-	return  ishairy(n->left) ||
-		ishairy(n->right) ||
-		ishairylist(n->list) ||
-		ishairylist(n->rlist) ||
-		ishairylist(n->ninit) ||
-		ishairy(n->ntest) ||
-		ishairy(n->nincr) ||
-		ishairylist(n->nbody) ||
-		ishairylist(n->nelse);
+	(*budget)--;
+
+	return  *budget < 0 ||
+		ishairy(n->left, budget) ||
+		ishairy(n->right, budget) ||
+		ishairylist(n->list, budget) ||
+		ishairylist(n->rlist, budget) ||
+		ishairylist(n->ninit, budget) ||
+		ishairy(n->ntest, budget) ||
+		ishairy(n->nincr, budget) ||
+		ishairylist(n->nbody, budget) ||
+		ishairylist(n->nelse, budget);
 }
 
 // Inlcopy and inlcopylist recursively copy the body of a function.
@@ -195,6 +290,7 @@ static void
 inlconv2stmt(Node *n)
 {
 	n->op = OBLOCK;
+	// n->ninit stays
 	n->list = n->nbody;
 	n->nbody = nil;
 	n->rlist = nil;
@@ -202,41 +298,33 @@ inlconv2stmt(Node *n)
 
 // Turn an OINLCALL into a single valued expression.
 static void
-inlconv2expr(Node *n)
+inlconv2expr(Node **np)
 {
-	n->op = OCONVNOP;
-	n->left = n->rlist->n;
-	n->rlist = nil;
-	n->ninit = concat(n->ninit, n->nbody);
-	n->nbody = nil;
+	Node *n, *r;
+	n = *np;
+	r = n->rlist->n;
+	addinit(&r, concat(n->ninit, n->nbody));
+	*np = r;
 }
 
-// Turn the OINLCALL in n->list into an expression list on n.
-// Used in return and call statements.
-static void
-inlgluelist(Node *n)
+// Turn the rlist (with the return values) of the OINLCALL in
+// n into an expression list lumping the ninit and body
+// containing the inlined statements on the first list element so
+// order will be preserved Used in return, oas2func and call
+// statements.
+static NodeList*
+inlconv2list(Node *n)
 {
-	Node *c;
+	NodeList *l;
 
-	c = n->list->n;
-	n->ninit = concat(n->ninit, c->ninit);
-	n->ninit = concat(n->ninit, c->nbody);
-	n->list  = c->rlist;
+	if(n->op != OINLCALL || n->rlist == nil)
+		fatal("inlconv2list %+N\n", n);
+	
+	l = n->rlist;
+	addinit(&l->n, concat(n->ninit, n->nbody));
+	return l;
 } 
-
-// Turn the OINLCALL in n->rlist->n into an expression list on n.
-// Used in OAS2FUNC.
-static void
-inlgluerlist(Node *n)
-{
-	Node *c;
-
-	c = n->rlist->n;
-	n->ninit = concat(n->ninit, c->ninit);
-	n->ninit = concat(n->ninit, c->nbody);
-	n->rlist = c->rlist;
-} 
-
+ 
 static void
 inlnodelist(NodeList *l)
 {
@@ -250,19 +338,23 @@ inlnodelist(NodeList *l)
 // nbody and nelse and use one of the 4 inlconv/glue functions above
 // to turn the OINLCALL into an expression, a statement, or patch it
 // in to this nodes list or rlist as appropriate.
-// NOTE it makes no sense to pass the glue functions down the recursion to the level where the OINLCALL gets created because they have to edit /this/ n,
-// so you'd have to push that one down as well, but then you may as well do it here.  so this is cleaner and shorter and less complicated.
+// NOTE it makes no sense to pass the glue functions down the
+// recursion to the level where the OINLCALL gets created because they
+// have to edit /this/ n, so you'd have to push that one down as well,
+// but then you may as well do it here.  so this is cleaner and
+// shorter and less complicated.
 static void
 inlnode(Node **np)
 {
 	Node *n;
 	NodeList *l;
+	int lno;
 
 	if(*np == nil)
 		return;
 
 	n = *np;
-
+	
 	switch(n->op) {
 	case ODEFER:
 	case OPROC:
@@ -274,9 +366,12 @@ inlnode(Node **np)
 		}
 
 	case OCLOSURE:
-		// TODO.  do them here rather than in lex.c phase 6b
+		// TODO do them here instead of in lex.c phase 6b, so escape analysis
+		// can avoid more heapmoves.
 		return;
 	}
+
+	lno = setlineno(n);
 
 	inlnodelist(n->ninit);
 	for(l=n->ninit; l; l=l->next)
@@ -285,11 +380,11 @@ inlnode(Node **np)
 
 	inlnode(&n->left);
 	if(n->left && n->left->op == OINLCALL)
-		inlconv2expr(n->left);
+		inlconv2expr(&n->left);
 
 	inlnode(&n->right);
 	if(n->right && n->right->op == OINLCALL)
-		inlconv2expr(n->right);
+		inlconv2expr(&n->right);
 
 	inlnodelist(n->list);
 	switch(n->op) {
@@ -300,36 +395,28 @@ inlnode(Node **np)
 		break;
 
 	case ORETURN:
-		if(count(n->list) == 1 && curfn->type->outtuple > 1 && n->list->n->op == OINLCALL) {
-			inlgluelist(n);
-			break;
-		}
-		
-		goto list_dflt;
-
+	case OCALLFUNC:
 	case OCALLMETH:
 	case OCALLINTER:
-	case OCALLFUNC:
-		// if we just replaced arg in f(arg()) with an inlined call
+		// if we just replaced arg in f(arg()) or return arg with an inlined call
 		// and arg returns multiple values, glue as list
 		if(count(n->list) == 1 && n->list->n->op == OINLCALL && count(n->list->n->rlist) > 1) {
-			inlgluelist(n);
+			n->list = inlconv2list(n->list->n);
 			break;
 		}
 
 		// fallthrough
 	default:
-	list_dflt:
 		for(l=n->list; l; l=l->next)
 			if(l->n->op == OINLCALL)
-				inlconv2expr(l->n);
+				inlconv2expr(&l->n);
 	}
 
 	inlnodelist(n->rlist);
 	switch(n->op) {
 	case OAS2FUNC:
 		if(n->rlist->n->op == OINLCALL) {
-			inlgluerlist(n);
+			n->rlist = inlconv2list(n->rlist->n);
 			n->op = OAS2;
 			n->typecheck = 0;
 			typecheck(np, Etop);
@@ -340,13 +427,13 @@ inlnode(Node **np)
 	default:
 		for(l=n->rlist; l; l=l->next)
 			if(l->n->op == OINLCALL)
-				inlconv2expr(l->n);
+				inlconv2expr(&l->n);
 
 	}
 
 	inlnode(&n->ntest);
 	if(n->ntest && n->ntest->op == OINLCALL)
-		inlconv2expr(n->ntest);
+		inlconv2expr(&n->ntest);
 
 	inlnode(&n->nincr);
 	if(n->nincr && n->nincr->op == OINLCALL)
@@ -374,45 +461,81 @@ inlnode(Node **np)
 
 	switch(n->op) {
 	case OCALLFUNC:
-		if(debug['l']>3)
-			print("%L:call to func %lN\n", n->lineno, n->left);
-		mkinlcall(np, n->left);
+		if(debug['m']>3)
+			print("%L:call to func %+N\n", n->lineno, n->left);
+		if(n->left->inl)	// normal case
+			mkinlcall(np, n->left);
+		else if(n->left->op == ONAME && n->left->left && n->left->left->op == OTYPE && n->left->right &&  n->left->right->op == ONAME)  // methods called as functions
+			if(n->left->sym->def)
+				mkinlcall(np, n->left->sym->def);
 		break;
 
 	case OCALLMETH:
-		if(debug['l']>3)
+		if(debug['m']>3)
 			print("%L:call to meth %lN\n", n->lineno, n->left->right);
-		// typecheck resolved ODOTMETH->type, whose nname points to the actual function.
-		if(n->left->type->nname) 
-			mkinlcall(np, n->left->type->nname);
-		else
+		// typecheck should have resolved ODOTMETH->type, whose nname points to the actual function.
+		if(n->left->type == T) 
+			fatal("no function type for [%p] %+N\n", n->left, n->left);
+
+		if(n->left->type->nname == N) 
 			fatal("no function definition for [%p] %+T\n", n->left->type, n->left->type);
+
+		mkinlcall(np, n->left->type->nname);
+
 		break;
 	}
+	
+	lineno = lno;
 }
 
+static void	mkinlcall1(Node **np, Node *fn);
+
+static void
+mkinlcall(Node **np, Node *fn)
+{
+	int save_safemode;
+	Pkg *pkg;
+
+	save_safemode = safemode;
+
+	// imported functions may refer to unsafe as long as the
+	// package was marked safe during import (already checked).
+	pkg = fnpkg(fn);
+	if(pkg != localpkg && pkg != nil)
+		safemode = 0;
+	mkinlcall1(np, fn);
+	safemode = save_safemode;
+}
 // if *np is a call, and fn is a function with an inlinable body, substitute *np with an OINLCALL.
 // On return ninit has the parameter assignments, the nbody is the
 // inlined function body and list, rlist contain the input, output
 // parameters.
 static void
-mkinlcall(Node **np, Node *fn)
+mkinlcall1(Node **np, Node *fn)
 {
 	int i;
-	Node *n, *call, *saveinlfn, *as;
+	Node *n, *call, *saveinlfn, *as, *m;
 	NodeList *dcl, *ll, *ninit, *body;
 	Type *t;
 
 	if (fn->inl == nil)
 		return;
 
+	if (fn == curfn || fn->defn == curfn)
+		return;
+
+	if(debug['l']<2)
+		typecheckinl(fn);
+
 	n = *np;
 
 	// Bingo, we have a function node, and it has an inlineable body
-	if(debug['l']>1)
+	if(debug['m']>1)
 		print("%L: inlining call to %S %#T { %#H }\n", n->lineno, fn->sym, fn->type, fn->inl);
+	else if(debug['m'])
+		print("%L: inlining call to %N\n", n->lineno, fn);
 
-	if(debug['l']>2)
+	if(debug['m']>2)
 		print("%L: Before inlining: %+N\n", n->lineno, n);
 
 	saveinlfn = inlfn;
@@ -425,30 +548,58 @@ mkinlcall(Node **np, Node *fn)
 	else // imported function
 		dcl = fn->dcl;
 
-	// Make temp names to use instead of the originals for anything but the outparams
+	inlretvars = nil;
+	i = 0;
+	// Make temp names to use instead of the originals
 	for(ll = dcl; ll; ll=ll->next)
-		if(ll->n->op == ONAME && ll->n->class != PPARAMOUT) {
+		if(ll->n->op == ONAME) {
 			ll->n->inlvar = inlvar(ll->n);
 			ninit = list(ninit, nod(ODCL, ll->n->inlvar, N));  // otherwise gen won't emit the allocations for heapallocs
+			if (ll->n->class == PPARAMOUT)  // we rely on the order being correct here
+				inlretvars = list(inlretvars, ll->n->inlvar);
+		}
+
+	// anonymous return values, synthesize names for use in assignment that replaces return
+	if(inlretvars == nil && fn->type->outtuple > 0)
+		for(t = getoutargx(fn->type)->type; t; t = t->down) {
+			m = retvar(t, i++);
+			ninit = list(ninit, nod(ODCL, m, N));
+			inlretvars = list(inlretvars, m);
 		}
 
 	// assign arguments to the parameters' temp names
+	as = N;
 	if(fn->type->thistuple) {
-		if (!n->left->op == ODOTMETH || !n->left->left)
-			fatal("method call without receiver: %+N", n);
 		t = getthisx(fn->type)->type;
-		if(t != T && t->nname) {
-			if(!t->nname->inlvar)
-				fatal("missing inlvar for %N\n", t->nname);
-			as = nod(OAS, t->nname->inlvar, n->left->left);
+		if(t != T && t->nname != N && !isblank(t->nname) && !t->nname->inlvar)
+			fatal("missing inlvar for %N\n", t->nname);
+
+		if(n->left->op == ODOTMETH) {
+			if(!n->left->left)
+				fatal("method call without receiver: %+N", n);
+			if(t == T)
+				fatal("method call unknown receiver type: %+N", n);
+			if(t->nname != N && !isblank(t->nname))
+				as = nod(OAS, t->nname->inlvar, n->left->left);
+			else
+				as = nod(OAS, temp(t->type), n->left->left);
+		} else {  // non-method call to method
+			if (!n->list)
+				fatal("non-method call to method without first arg: %+N", n);
+			if(t != T && t->nname != N && !isblank(t->nname))
+				as = nod(OAS, t->nname->inlvar, n->list->n);
+		}
+
+		if(as != N) {
 			typecheck(&as, Etop);
 			ninit = list(ninit, as);
-		} // else if !ONAME add to init anyway?
+		}
 	}
 
 	as = nod(OAS2, N, N);
 	if(fn->type->intuple > 1 && n->list && !n->list->next) {
 		// TODO check that n->list->n is a call?
+		// TODO: non-method call to T.meth(f()) where f returns t, args...
 		as->rlist = n->list;
 		for(t = getinargx(fn->type)->type; t; t=t->down) {
 			if(t->nname && !isblank(t->nname)) {
@@ -461,6 +612,9 @@ mkinlcall(Node **np, Node *fn)
 		}		
 	} else {
 		ll = n->list;
+		if(fn->type->thistuple && n->left->op != ODOTMETH) // non method call to method
+			ll=ll->next;  // was handled above in if(thistuple)
+
 		for(t = getinargx(fn->type)->type; t && ll; t=t->down) {
 			if(t->nname && !isblank(t->nname)) {
 				if(!t->nname->inlvar)
@@ -479,12 +633,13 @@ mkinlcall(Node **np, Node *fn)
 		ninit = list(ninit, as);
 	}
 
-	// make the outparams.  No need to declare because currently they'll only be used in the assignment that replaces returns.
-	inlretvars = nil;
-	i = 0;
-	for(t = getoutargx(fn->type)->type; t; t = t->down)
-		inlretvars = list(inlretvars, retvar(t, i++));
-	
+	// zero the outparams
+	for(ll = inlretvars; ll; ll=ll->next) {
+		as = nod(OAS, ll->n, N);
+		typecheck(&as, Etop);
+		ninit = list(ninit, as);
+	}
+
 	inlretlabel = newlabel();
 	body = inlsubstlist(fn->inl);
 
@@ -505,7 +660,22 @@ mkinlcall(Node **np, Node *fn)
 	*np = call;
 
 	inlfn =	saveinlfn;
-	if(debug['l']>2)
+
+	// transitive inlining
+	// TODO do this pre-expansion on fn->inl directly.  requires
+	// either supporting exporting statemetns with complex ninits
+	// or saving inl and making inlinl
+	if(debug['l'] >= 5) {
+		body = fn->inl;
+		fn->inl = nil;	// prevent infinite recursion
+		inlnodelist(call->nbody);
+		for(ll=call->nbody; ll; ll=ll->next)
+			if(ll->n->op == OINLCALL)
+				inlconv2stmt(ll->n);
+		fn->inl = body;
+	}
+
+	if(debug['m']>2)
 		print("%L: After inlining %+N\n\n", n->lineno, *np);
 
 }
@@ -518,7 +688,7 @@ inlvar(Node *var)
 {
 	Node *n;
 
-	if(debug['l']>3)
+	if(debug['m']>3)
 		print("inlvar %+N\n", var);
 
 	n = newname(var->sym);
@@ -527,29 +697,6 @@ inlvar(Node *var)
 	n->used = 1;
 	n->curfn = curfn;   // the calling function, not the called one
 	curfn->dcl = list(curfn->dcl, n);
-	return n;
-}
-
-// Make a new pparamref
-static Node*
-inlref(Node *var)
-{
-	Node *n;
-
-	if (!var->closure)
-		fatal("No ->closure: %N", var);
-
-	if (!var->closure->inlvar)
-		fatal("No ->closure->inlref: %N", var);
-
-	n = nod(OXXX, N, N);
-	*n = *var;
-
-//	if(debug['l']>1)
-//		print("inlref: %N -> %N\n", var, var->closure->inlvar);
-
-	var = var->closure->inlvar;
-
 	return n;
 }
 
@@ -597,8 +744,6 @@ inlsubstlist(NodeList *ll)
 	return l;
 }
 
-static int closuredepth;
-
 static Node*
 inlsubst(Node *n)
 {
@@ -611,12 +756,12 @@ inlsubst(Node *n)
 	switch(n->op) {
 	case ONAME:
 		if(n->inlvar) { // These will be set during inlnode
-			if (debug['l']>2)
-				print ("substituting name %N  ->  %N\n", n, n->inlvar);
+			if (debug['m']>2)
+				print ("substituting name %+N  ->  %+N\n", n, n->inlvar);
 			return n->inlvar;
 		}
-		if (debug['l']>2)
-			print ("not substituting name %N\n", n);
+		if (debug['m']>2)
+			print ("not substituting name %+N\n", n);
 		return n;
 
 	case OLITERAL:
@@ -624,26 +769,17 @@ inlsubst(Node *n)
 		return n;
 
 	case ORETURN:
-		// only rewrite returns belonging to this function, not nested ones.
-		if (closuredepth > 0)
-			break;
-		
+		// Since we don't handle bodies with closures, this return is guaranteed to belong to the current inlined function.
+
 //		dump("Return before substitution", n);
 		m = nod(OGOTO, inlretlabel, N);
 		m->ninit  = inlsubstlist(n->ninit);
 
-		// rewrite naked return for function with return values to return PPARAMOUTs
-		if(count(n->list) == 0 && inlfn->type->outtuple > 0) {
-			for(ll = inlfn->dcl; ll; ll=ll->next)
-				if(ll->n->op == ONAME && ll->n->class == PPARAMOUT)
-					n->list = list(n->list, ll->n);
-
-//			dump("Return naked -> dressed ", n);
-		}
-
 		if(inlretvars && n->list) {
 			as = nod(OAS2, N, N);
-			as->list = inlretvars;
+			// shallow copy or OINLCALL->rlist will be the same list, and later walk and typecheck may clobber that.
+			for(ll=inlretvars; ll; ll=ll->next)
+				as->list = list(as->list, ll->n);
 			as->rlist = inlsubstlist(n->list);
 			typecheck(&as, Etop);
 			m->ninit = list(m->ninit, as);
@@ -660,20 +796,9 @@ inlsubst(Node *n)
 	*m = *n;
 	m->ninit = nil;
 	
-	if(n->op == OCLOSURE) {
-		closuredepth++;
+	if(n->op == OCLOSURE)
+		fatal("cannot inline function containing closure: %+N", n);
 
-		for(ll = m->dcl; ll; ll=ll->next)
-			if(ll->n->op == ONAME) {
-				ll->n->inlvar = inlvar(ll->n);
-				m->ninit = list(m->ninit, nod(ODCL, ll->n->inlvar, N));  // otherwise gen won't emit the allocations for heapallocs
-			}
-		
-		for (ll=m->cvars; ll; ll=ll->next)
-			if (ll->n->op == ONAME)
-				ll->n->cvars = list(ll->n->cvars, inlref(ll->n));
-	}
-	
 	m->left	  = inlsubst(n->left);
 	m->right  = inlsubst(n->right);
 	m->list	  = inlsubstlist(n->list);
@@ -683,9 +808,6 @@ inlsubst(Node *n)
 	m->nincr  = inlsubst(n->nincr);
 	m->nbody  = inlsubstlist(n->nbody);
 	m->nelse  = inlsubstlist(n->nelse);
-
-	if(n->op == OCLOSURE)
-		closuredepth--;
 
 	return m;
 }

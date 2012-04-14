@@ -29,3 +29,19 @@ func StringBytePtr(s string) *byte { return &StringByteSlice(s)[0] }
 // Single-word zero for use when we need a valid pointer to 0 bytes.
 // See mksyscall.pl.
 var _zero uintptr
+
+func (ts *Timespec) Unix() (sec int64, nsec int64) {
+	return int64(ts.Sec), int64(ts.Nsec)
+}
+
+func (tv *Timeval) Unix() (sec int64, nsec int64) {
+	return int64(tv.Sec), int64(tv.Usec) * 1000
+}
+
+func (ts *Timespec) Nano() int64 {
+	return int64(ts.Sec)*1e9 + int64(ts.Nsec)
+}
+
+func (tv *Timeval) Nano() int64 {
+	return int64(tv.Sec)*1e9 + int64(tv.Usec)*1000
+}

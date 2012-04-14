@@ -108,10 +108,11 @@ func TestAfter(t *testing.T) {
 }
 
 func TestAfterTick(t *testing.T) {
-	const (
-		Delta = 100 * Millisecond
-		Count = 10
-	)
+	const Count = 10
+	Delta := 100 * Millisecond
+	if testing.Short() {
+		Delta = 10 * Millisecond
+	}
 	t0 := Now()
 	for i := 0; i < Count; i++ {
 		<-After(Delta)
@@ -119,8 +120,11 @@ func TestAfterTick(t *testing.T) {
 	t1 := Now()
 	d := t1.Sub(t0)
 	target := Delta * Count
-	if d < target*9/10 || d > target*30/10 {
-		t.Fatalf("%d ticks of %s took %s, expected %s", Count, Delta, d, target)
+	if d < target*9/10 {
+		t.Fatalf("%d ticks of %s too fast: took %s, expected %s", Count, Delta, d, target)
+	}
+	if !testing.Short() && d > target*30/10 {
+		t.Fatalf("%d ticks of %s too slow: took %s, expected %s", Count, Delta, d, target)
 	}
 }
 
@@ -176,9 +180,10 @@ func await(slot int, result chan<- afterResult, ac <-chan Time) {
 }
 
 func testAfterQueuing(t *testing.T) error {
-	const (
-		Delta = 100 * Millisecond
-	)
+	Delta := 100 * Millisecond
+	if testing.Short() {
+		Delta = 20 * Millisecond
+	}
 	// make the result channel buffered because we don't want
 	// to depend on channel queueing semantics that might
 	// possibly change in the future.

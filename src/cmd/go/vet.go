@@ -6,15 +6,15 @@ package main
 
 var cmdVet = &Command{
 	Run:       runVet,
-	UsageLine: "vet [importpath...]",
-	Short:     "run govet on packages",
+	UsageLine: "vet [packages]",
+	Short:     "run go tool vet on packages",
 	Long: `
-Vet runs the govet command on the packages named by the import paths.
+Vet runs the Go vet command on the packages named by the import paths.
 
-For more about govet, see 'godoc govet'.
-For more about import paths, see 'go help importpath'.
+For more about vet, see 'godoc vet'.
+For more about specifying packages, see 'go help packages'.
 
-To run govet with specific options, run govet itself.
+To run the vet tool with specific options, run 'go tool vet'.
 
 See also: go fmt, go fix.
 	`,
@@ -25,6 +25,6 @@ func runVet(cmd *Command, args []string) {
 		// Use pkg.gofiles instead of pkg.Dir so that
 		// the command only applies to this package,
 		// not to packages in subdirectories.
-		run(append([]string{"govet"}, pkg.gofiles...)...)
+		run(tool("vet"), relPaths(pkg.gofiles))
 	}
 }

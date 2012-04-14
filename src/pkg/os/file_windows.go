@@ -30,19 +30,20 @@ type file struct {
 }
 
 // Fd returns the Windows handle referencing the open file.
-func (file *File) Fd() syscall.Handle {
+func (file *File) Fd() uintptr {
 	if file == nil {
-		return syscall.InvalidHandle
+		return uintptr(syscall.InvalidHandle)
 	}
-	return file.fd
+	return uintptr(file.fd)
 }
 
 // NewFile returns a new File with the given file descriptor and name.
-func NewFile(fd syscall.Handle, name string) *File {
-	if fd < 0 {
+func NewFile(fd uintptr, name string) *File {
+	h := syscall.Handle(fd)
+	if h == syscall.InvalidHandle {
 		return nil
 	}
-	f := &File{&file{fd: fd, name: name}}
+	f := &File{&file{fd: h, name: name}}
 	runtime.SetFinalizer(f.file, (*file).close)
 	return f
 }
@@ -51,14 +52,15 @@ func NewFile(fd syscall.Handle, name string) *File {
 type dirInfo struct {
 	data     syscall.Win32finddata
 	needdata bool
+	path     string
 }
 
 const DevNull = "NUL"
 
-func (file *file) isdir() bool { return file != nil && file.dirinfo != nil }
+func (f *file) isdir() bool { return f != nil && f.dirinfo != nil }
 
-func openFile(name string, flag int, perm uint32) (file *File, err error) {
-	r, e := syscall.Open(name, flag|syscall.O_CLOEXEC, perm)
+func openFile(name string, flag int, perm FileMode) (file *File, err error) {
+	r, e := syscall.Open(name, flag|syscall.O_CLOEXEC, syscallMode(perm))
 	if e != nil {
 		return nil, &PathError{"open", name, e}
 	}
@@ -69,7 +71,7 @@ func openFile(name string, flag int, perm uint32) (file *File, err error) {
 		syscall.CloseOnExec(r)
 	}
 
-	return NewFile(r, name), nil
+	return NewFile(uintptr(r), name), nil
 }
 
 func openDir(name string) (file *File, err error) {
@@ -78,7 +80,12 @@ func openDir(name string) (file *File, err error) {
 	if e != nil {
 		return nil, &PathError{"open", name, e}
 	}
-	f := NewFile(r, name)
+	d.path = name
+	if !isAbs(d.path) {
+		cwd, _ := Getwd()
+		d.path = cwd + `\` + d.path
+	}
+	f := NewFile(uintptr(r), name)
 	f.dirinfo = d
 	return f, nil
 }
@@ -87,8 +94,8 @@ func openDir(name string) (file *File, err error) {
 // or Create instead.  It opens the named file with specified flag
 // (O_RDONLY etc.) and perm, (0666 etc.) if applicable.  If successful,
 // methods on the returned File can be used for I/O.
-// It returns the File and an error, if any.
-func OpenFile(name string, flag int, perm uint32) (file *File, err error) {
+// If there is an error, it will be of type *PathError.
+func OpenFile(name string, flag int, perm FileMode) (file *File, err error) {
 	if name == "" {
 		return nil, &PathError{"open", name, syscall.ENOENT}
 	}
@@ -97,7 +104,7 @@ func OpenFile(name string, flag int, perm uint32) (file *File, err error) {
 	if e == nil {
 		if flag&O_WRONLY != 0 || flag&O_RDWR != 0 {
 			r.Close()
-			return nil, &PathError{"open", name, EISDIR}
+			return nil, &PathError{"open", name, syscall.EISDIR}
 		}
 		return r, nil
 	}
@@ -115,8 +122,8 @@ func (file *File) Close() error {
 }
 
 func (file *file) close() error {
-	if file == nil || file.fd < 0 {
-		return EINVAL
+	if file == nil || file.fd == syscall.InvalidHandle {
+		return syscall.EINVAL
 	}
 	var e error
 	if file.isdir() {
@@ -135,27 +142,12 @@ func (file *file) close() error {
 	return err
 }
 
-// Readdir reads the contents of the directory associated with file and
-// returns an array of up to n FileInfo structures, as would be returned
-// by Lstat, in directory order. Subsequent calls on the same file will yield
-// further FileInfos.
-//
-// If n > 0, Readdir returns at most n FileInfo structures. In this case, if
-// Readdir returns an empty slice, it will return a non-nil error
-// explaining why. At the end of a directory, the error is io.EOF.
-//
-// If n <= 0, Readdir returns all the FileInfo from the directory in
-// a single slice. In this case, if Readdir succeeds (reads all
-// the way to the end of the directory), it returns the slice and a
-// nil error. If it encounters an error before the end of the
-// directory, Readdir returns the FileInfo read until that point
-// and a non-nil error.
-func (file *File) Readdir(n int) (fi []FileInfo, err error) {
-	if file == nil || file.fd < 0 {
-		return nil, EINVAL
+func (file *File) readdir(n int) (fi []FileInfo, err error) {
+	if file == nil || file.fd == syscall.InvalidHandle {
+		return nil, syscall.EINVAL
 	}
 	if !file.isdir() {
-		return nil, &PathError{"Readdir", file.name, ENOTDIR}
+		return nil, &PathError{"Readdir", file.name, syscall.ENOTDIR}
 	}
 	wantAll := n <= 0
 	size := n
@@ -185,7 +177,13 @@ func (file *File) Readdir(n int) (fi []FileInfo, err error) {
 		if name == "." || name == ".." { // Useless names
 			continue
 		}
-		f := toFileInfo(name, d.FileAttributes, d.FileSizeHigh, d.FileSizeLow, d.CreationTime, d.LastAccessTime, d.LastWriteTime)
+		f := &fileStat{
+			name:    name,
+			size:    mkSize(d.FileSizeHigh, d.FileSizeLow),
+			modTime: mkModTime(d.LastWriteTime),
+			mode:    mkMode(d.FileAttributes),
+			sys:     mkSys(file.dirinfo.path+`\`+name, d.LastAccessTime, d.CreationTime),
+		}
 		n--
 		fi = append(fi, f)
 	}
@@ -282,6 +280,7 @@ func Truncate(name string, size int64) error {
 }
 
 // Remove removes the named file or directory.
+// If there is an error, it will be of type *PathError.
 func Remove(name string) error {
 	p := &syscall.StringToUTF16(name)[0]
 
@@ -326,7 +325,7 @@ func Pipe() (r *File, w *File, err error) {
 	syscall.CloseOnExec(p[1])
 	syscall.ForkLock.RUnlock()
 
-	return NewFile(p[0], "|0"), NewFile(p[1], "|1"), nil
+	return NewFile(uintptr(p[0]), "|0"), NewFile(uintptr(p[1]), "|1"), nil
 }
 
 // TempDir returns the default directory to use for temporary files.

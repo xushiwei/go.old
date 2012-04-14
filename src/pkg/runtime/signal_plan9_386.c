@@ -4,10 +4,10 @@
 
 #include "runtime.h"
 
-String
-runtime·signame(int32)
+void
+runtime·sigenable(uint32 sig)
 {
-	return runtime·emptystring;
+	USED(sig);
 }
 
 void

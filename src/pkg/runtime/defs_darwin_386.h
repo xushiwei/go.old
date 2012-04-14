@@ -1,5 +1,5 @@
 // Created by cgo -cdefs - DO NOT EDIT
-// cgo -cdefs defs.go
+// cgo -cdefs defs_darwin.go
 
 
 enum {
@@ -11,6 +11,9 @@ enum {
 	MAP_ANON	= 0x1000,
 	MAP_PRIVATE	= 0x2,
 	MAP_FIXED	= 0x10,
+
+	MADV_DONTNEED	= 0x4,
+	MADV_FREE	= 0x5,
 
 	MACH_MSG_TYPE_MOVE_RECEIVE	= 0x10,
 	MACH_MSG_TYPE_MOVE_SEND		= 0x11,
@@ -33,7 +36,6 @@ enum {
 
 	MACH_SEND_TIMEOUT	= 0x10,
 	MACH_SEND_INTERRUPT	= 0x40,
-	MACH_SEND_CANCEL	= 0x80,
 	MACH_SEND_ALWAYS	= 0x10000,
 	MACH_SEND_TRAILER	= 0x20000,
 	MACH_RCV_TIMEOUT	= 0x100,
@@ -197,10 +199,10 @@ struct Itimerval {
 };
 
 struct FPControl {
-	byte	Pad_godefs_0[2];
+	byte	Pad_cgo_0[2];
 };
 struct FPStatus {
-	byte	Pad_godefs_0[2];
+	byte	Pad_cgo_0[2];
 };
 struct RegMMST {
 	int8	mmst_reg[10];
@@ -276,7 +278,8 @@ struct FloatState64 {
 	int32	fpu_reserved1;
 };
 struct ExceptionState64 {
-	uint32	trapno;
+	uint16	trapno;
+	uint16	cpu;
 	uint32	err;
 	uint64	faultvaddr;
 };
@@ -339,7 +342,8 @@ struct FloatState32 {
 	int32	fpu_reserved1;
 };
 struct ExceptionState32 {
-	uint32	trapno;
+	uint16	trapno;
+	uint16	cpu;
 	uint32	err;
 	uint32	faultvaddr;
 };

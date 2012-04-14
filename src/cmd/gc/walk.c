@@ -199,14 +199,12 @@ walkstmt(Node **np)
 	case OPANIC:
 	case OEMPTY:
 	case ORECOVER:
-		if(n->typecheck == 0) {
-			dump("missing typecheck:", n);
-			fatal("missing typecheck");
-		}
+		if(n->typecheck == 0)
+			fatal("missing typecheck: %+N", n);
 		init = n->ninit;
 		n->ninit = nil;
 		walkexpr(&n, &init);
-		n->ninit = concat(init, n->ninit);
+		addinit(&n, init);
 		break;
 
 	case OBREAK:
@@ -250,7 +248,7 @@ walkstmt(Node **np)
 			init = n->ntest->ninit;
 			n->ntest->ninit = nil;
 			walkexpr(&n->ntest, &init);
-			n->ntest->ninit = concat(init, n->ntest->ninit);
+			addinit(&n->ntest, init);
 		}
 		walkstmt(&n->nincr);
 		walkstmtlist(n->nbody);
@@ -332,6 +330,9 @@ walkstmt(Node **np)
 		break;
 	}
 
+	if(n->op == ONAME)
+		fatal("walkstmt ended up with name: %+N", n);
+	
 	*np = n;
 }
 
@@ -402,10 +403,8 @@ walkexpr(Node **np, NodeList **init)
 	if(debug['w'] > 1)
 		dump("walk-before", n);
 
-	if(n->typecheck != 1) {
-		dump("missed typecheck", n);
-		fatal("missed typecheck");
-	}
+	if(n->typecheck != 1)
+		fatal("missed typecheck: %+N\n", n);
 
 	switch(n->op) {
 	default:
@@ -430,6 +429,10 @@ walkexpr(Node **np, NodeList **init)
 	case ODOTMETH:
 	case ODOTINTER:
 	case OIND:
+		walkexpr(&n->left, init);
+		goto ret;
+
+	case OITAB:
 		walkexpr(&n->left, init);
 		goto ret;
 
@@ -481,7 +484,7 @@ walkexpr(Node **np, NodeList **init)
 		// save elsewhere and store on the eventual n->right.
 		ll = nil;
 		walkexpr(&n->right, &ll);
-		n->right->ninit = concat(n->right->ninit, ll);
+		addinit(&n->right, ll);
 		goto ret;
 
 	case OPRINT:
@@ -643,12 +646,6 @@ walkexpr(Node **np, NodeList **init)
 		n->ninit = nil;
 		l = n->list->n;
 		r = n->list->next->n;
-		if(n->right != N) {
-			// TODO: Remove once two-element map assigment is gone.
-			l = safeexpr(l, init);
-			r = safeexpr(r, init);
-			safeexpr(n->right, init);  // cause side effects from n->right
-		}
 		t = l->type;
 		n = mkcall1(mapfndel("mapdelete", t), t->down, init, typename(t), l, r);
 		goto ret;
@@ -876,6 +873,7 @@ walkexpr(Node **np, NodeList **init)
 				// delayed until now because "abc"[2] is not
 				// an ideal constant.
 				nodconst(n, n->type, n->left->val.u.sval->s[v]);
+				n->typecheck = 1;
 			}
 		}
 		goto ret;
@@ -993,8 +991,10 @@ walkexpr(Node **np, NodeList **init)
 	case ONEW:
 		if(n->esc == EscNone && n->type->type->width < (1<<16)) {
 			r = temp(n->type->type);
-			*init = list(*init, nod(OAS, r, N));  // zero temp
-			r = nod(OADDR, r, N);
+			r = nod(OAS, r, N);  // zero temp
+			typecheck(&r, Etop);
+			*init = list(*init, r);
+			r = nod(OADDR, r->left, N);
 			typecheck(&r, Erv);
 			n = r;
 		} else {
@@ -1011,6 +1011,7 @@ walkexpr(Node **np, NodeList **init)
 			r = nod(n->etype, nod(OLEN, n->left, N), nod(OLEN, n->right, N));
 			typecheck(&r, Erv);
 			walkexpr(&r, init);
+			r->type = n->type;
 			n = r;
 			goto ret;
 		}
@@ -1023,6 +1024,7 @@ walkexpr(Node **np, NodeList **init)
 			r = nod(n->etype, nod(OLEN, n->left->left, N), nodintconst(0));
 			typecheck(&r, Erv);
 			walkexpr(&r, init);
+			r->type = n->type;
 			n = r;
 			goto ret;
 		}
@@ -1049,6 +1051,8 @@ walkexpr(Node **np, NodeList **init)
 			walkexpr(&r, nil);
 		}
 		typecheck(&r, Erv);
+		if(n->type->etype != TBOOL) fatal("cmp %T", n->type);
+		r->type = n->type;
 		n = r;
 		goto ret;
 
@@ -1174,10 +1178,17 @@ walkexpr(Node **np, NodeList **init)
 		argtype(fn, n->right->type);
 		argtype(fn, n->left->type);
 		r = mkcall1(fn, n->type, init, n->left, n->right);
-		if(n->etype == ONE) {
+		if(n->etype == ONE)
 			r = nod(ONOT, r, N);
-			typecheck(&r, Erv);
-		}
+		
+		// check itable/type before full compare.
+		if(n->etype == OEQ)
+			r = nod(OANDAND, nod(OEQ, nod(OITAB, n->left, N), nod(OITAB, n->right, N)), r);
+		else
+			r = nod(OOROR, nod(ONE, nod(OITAB, n->left, N), nod(OITAB, n->right, N)), r);
+		typecheck(&r, Erv);
+		walkexpr(&r, nil);
+		r->type = n->type;
 		n = r;
 		goto ret;
 
@@ -1201,10 +1212,11 @@ walkexpr(Node **np, NodeList **init)
 	fatal("missing switch %O", n->op);
 
 ret:
+	ullmancalc(n);
+
 	if(debug['w'] && n != N)
 		dump("walk", n);
 
-	ullmancalc(n);
 	lineno = lno;
 	*np = n;
 }
@@ -1877,7 +1889,7 @@ reorder3save(Node **np, NodeList *all, NodeList *stop, NodeList **early)
 	
 	q = temp(n->type);
 	q = nod(OAS, q, n);
-	q->typecheck = 1;
+	typecheck(&q, Etop);
 	*early = list(*early, q);
 	*np = q->left;
 }
@@ -2346,6 +2358,12 @@ append(Node *n, NodeList **init)
 
 	walkexprlistsafe(n->list, init);
 
+	// walkexprlistsafe will leave OINDEX (s[n]) alone if both s
+	// and n are name or literal, but those may index the slice we're
+	// modifying here.  Fix explicitly.
+	for(l=n->list; l; l=l->next)
+		l->n = cheapexpr(l->n, init);
+
 	nsrc = n->list->n;
 	argc = count(n->list) - 1;
 	if (argc < 1) {
@@ -2502,6 +2520,7 @@ walkcompare(Node **np, NodeList **init)
 			expr = nodbool(n->op == OEQ);
 		typecheck(&expr, Erv);
 		walkexpr(&expr, init);
+		expr->type = n->type;
 		*np = expr;
 		return;
 	}
@@ -2522,6 +2541,7 @@ walkcompare(Node **np, NodeList **init)
 			expr = nodbool(n->op == OEQ);
 		typecheck(&expr, Erv);
 		walkexpr(&expr, init);
+		expr->type = n->type;
 		*np = expr;
 		return;
 	}

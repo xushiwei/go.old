@@ -10,11 +10,13 @@ const (
 	ERROR_PATH_NOT_FOUND      Errno = 3
 	ERROR_ACCESS_DENIED       Errno = 5
 	ERROR_NO_MORE_FILES       Errno = 18
+	ERROR_FILE_EXISTS         Errno = 80
 	ERROR_BROKEN_PIPE         Errno = 109
 	ERROR_BUFFER_OVERFLOW     Errno = 111
 	ERROR_INSUFFICIENT_BUFFER Errno = 122
 	ERROR_MOD_NOT_FOUND       Errno = 126
 	ERROR_PROC_NOT_FOUND      Errno = 127
+	ERROR_ALREADY_EXISTS      Errno = 183
 	ERROR_ENVVAR_NOT_FOUND    Errno = 203
 	ERROR_OPERATION_ABORTED   Errno = 995
 	ERROR_IO_PENDING          Errno = 997
@@ -38,20 +40,38 @@ const (
 
 const (
 	// More invented values for signals
-	SIGHUP  = 0x1
-	SIGINT  = 0x2
-	SIGQUIT = 0x3
-	SIGILL  = 0x4
-	SIGTRAP = 0x5
-	SIGABRT = 0x6
-	SIGBUS  = 0x7
-	SIGFPE  = 0x8
-	SIGKILL = 0x9
-	SIGSEGV = 0xb
-	SIGPIPE = 0xd
-	SIGALRM = 0xe
-	SIGTERM = 0xf
+	SIGHUP  = Signal(0x1)
+	SIGINT  = Signal(0x2)
+	SIGQUIT = Signal(0x3)
+	SIGILL  = Signal(0x4)
+	SIGTRAP = Signal(0x5)
+	SIGABRT = Signal(0x6)
+	SIGBUS  = Signal(0x7)
+	SIGFPE  = Signal(0x8)
+	SIGKILL = Signal(0x9)
+	SIGSEGV = Signal(0xb)
+	SIGPIPE = Signal(0xd)
+	SIGALRM = Signal(0xe)
+	SIGTERM = Signal(0xf)
 )
+
+var signals = [...]string{
+	1:  "hangup",
+	2:  "interrupt",
+	3:  "quit",
+	4:  "illegal instruction",
+	5:  "trace/breakpoint trap",
+	6:  "aborted",
+	7:  "bus error",
+	8:  "floating point exception",
+	9:  "killed",
+	10: "user defined signal 1",
+	11: "segmentation fault",
+	12: "user defined signal 2",
+	13: "broken pipe",
+	14: "alarm clock",
+	15: "terminated",
+}
 
 const (
 	GENERIC_READ    = 0x80000000
@@ -98,6 +118,9 @@ const (
 	FILE_CURRENT = 1
 	FILE_END     = 2
 
+	LANG_ENGLISH       = 0x09
+	SUBLANG_ENGLISH_US = 0x01
+
 	FORMAT_MESSAGE_ALLOCATE_BUFFER = 256
 	FORMAT_MESSAGE_IGNORE_INSERTS  = 512
 	FORMAT_MESSAGE_FROM_STRING     = 1024
@@ -125,7 +148,6 @@ const (
 
 	CREATE_UNICODE_ENVIRONMENT = 0x00000400
 
-	STANDARD_RIGHTS_READ      = 0x00020000
 	PROCESS_QUERY_INFORMATION = 0x00000400
 	SYNCHRONIZE               = 0x00100000
 
@@ -143,6 +165,7 @@ const (
 )
 
 const (
+	// do not reorder
 	FILE_NOTIFY_CHANGE_FILE_NAME = 1 << iota
 	FILE_NOTIFY_CHANGE_DIR_NAME
 	FILE_NOTIFY_CHANGE_ATTRIBUTES
@@ -153,6 +176,7 @@ const (
 )
 
 const (
+	// do not reorder
 	FILE_ACTION_ADDED = iota + 1
 	FILE_ACTION_REMOVED
 	FILE_ACTION_MODIFIED
@@ -186,6 +210,63 @@ const (
 	CRYPT_MACHINE_KEYSET             = 0x00000020
 	CRYPT_SILENT                     = 0x00000040
 	CRYPT_DEFAULT_CONTAINER_OPTIONAL = 0x00000080
+
+	USAGE_MATCH_TYPE_AND = 0
+	USAGE_MATCH_TYPE_OR  = 1
+
+	X509_ASN_ENCODING   = 0x00000001
+	PKCS_7_ASN_ENCODING = 0x00010000
+
+	CERT_STORE_PROV_MEMORY = 2
+
+	CERT_STORE_ADD_ALWAYS = 4
+
+	CERT_STORE_DEFER_CLOSE_UNTIL_LAST_FREE_FLAG = 0x00000004
+
+	CERT_TRUST_NO_ERROR                          = 0x00000000
+	CERT_TRUST_IS_NOT_TIME_VALID                 = 0x00000001
+	CERT_TRUST_IS_REVOKED                        = 0x00000004
+	CERT_TRUST_IS_NOT_SIGNATURE_VALID            = 0x00000008
+	CERT_TRUST_IS_NOT_VALID_FOR_USAGE            = 0x00000010
+	CERT_TRUST_IS_UNTRUSTED_ROOT                 = 0x00000020
+	CERT_TRUST_REVOCATION_STATUS_UNKNOWN         = 0x00000040
+	CERT_TRUST_IS_CYCLIC                         = 0x00000080
+	CERT_TRUST_INVALID_EXTENSION                 = 0x00000100
+	CERT_TRUST_INVALID_POLICY_CONSTRAINTS        = 0x00000200
+	CERT_TRUST_INVALID_BASIC_CONSTRAINTS         = 0x00000400
+	CERT_TRUST_INVALID_NAME_CONSTRAINTS          = 0x00000800
+	CERT_TRUST_HAS_NOT_SUPPORTED_NAME_CONSTRAINT = 0x00001000
+	CERT_TRUST_HAS_NOT_DEFINED_NAME_CONSTRAINT   = 0x00002000
+	CERT_TRUST_HAS_NOT_PERMITTED_NAME_CONSTRAINT = 0x00004000
+	CERT_TRUST_HAS_EXCLUDED_NAME_CONSTRAINT      = 0x00008000
+	CERT_TRUST_IS_OFFLINE_REVOCATION             = 0x01000000
+	CERT_TRUST_NO_ISSUANCE_CHAIN_POLICY          = 0x02000000
+	CERT_TRUST_IS_EXPLICIT_DISTRUST              = 0x04000000
+	CERT_TRUST_HAS_NOT_SUPPORTED_CRITICAL_EXT    = 0x08000000
+
+	CERT_CHAIN_POLICY_BASE              = 1
+	CERT_CHAIN_POLICY_AUTHENTICODE      = 2
+	CERT_CHAIN_POLICY_AUTHENTICODE_TS   = 3
+	CERT_CHAIN_POLICY_SSL               = 4
+	CERT_CHAIN_POLICY_BASIC_CONSTRAINTS = 5
+	CERT_CHAIN_POLICY_NT_AUTH           = 6
+	CERT_CHAIN_POLICY_MICROSOFT_ROOT    = 7
+	CERT_CHAIN_POLICY_EV                = 8
+
+	CERT_E_EXPIRED       = 0x800B0101
+	CERT_E_ROLE          = 0x800B0103
+	CERT_E_PURPOSE       = 0x800B0106
+	CERT_E_UNTRUSTEDROOT = 0x800B0109
+	CERT_E_CN_NO_MATCH   = 0x800B010F
+
+	AUTHTYPE_CLIENT = 1
+	AUTHTYPE_SERVER = 2
+)
+
+var (
+	OID_PKIX_KP_SERVER_AUTH = []byte("1.3.6.1.5.5.7.3.1\x00")
+	OID_SERVER_GATED_CRYPTO = []byte("1.3.6.1.4.1.311.10.3.3\x00")
+	OID_SGC_NETSCAPE        = []byte("2.16.840.1.113730.4.1\x00")
 )
 
 // Invented values to support what package os expects.
@@ -230,6 +311,8 @@ type Filetime struct {
 	HighDateTime uint32
 }
 
+// Nanoseconds returns Filetime ft in nanoseconds
+// since Epoch (00:00:00 UTC, January 1, 1970).
 func (ft *Filetime) Nanoseconds() int64 {
 	// 100-nanosecond intervals since January 1, 1601
 	nsec := int64(ft.HighDateTime)<<32 + int64(ft.LowDateTime)
@@ -373,9 +456,10 @@ const (
 	SOCK_RAW       = 3
 	SOCK_SEQPACKET = 5
 
-	IPPROTO_IP  = 0
-	IPPROTO_TCP = 6
-	IPPROTO_UDP = 17
+	IPPROTO_IP   = 0
+	IPPROTO_IPV6 = 0x29
+	IPPROTO_TCP  = 6
+	IPPROTO_UDP  = 17
 
 	SOL_SOCKET               = 0xffff
 	SO_REUSEADDR             = 4
@@ -387,8 +471,23 @@ const (
 	SO_SNDBUF                = 0x1001
 	SO_UPDATE_ACCEPT_CONTEXT = 0x700b
 
-	IPPROTO_IPV6 = 0x29
-	IPV6_V6ONLY  = 0x1b
+	// cf. http://support.microsoft.com/default.aspx?scid=kb;en-us;257460
+
+	IP_TOS             = 0x3
+	IP_TTL             = 0x4
+	IP_MULTICAST_IF    = 0x9
+	IP_MULTICAST_TTL   = 0xa
+	IP_MULTICAST_LOOP  = 0xb
+	IP_ADD_MEMBERSHIP  = 0xc
+	IP_DROP_MEMBERSHIP = 0xd
+
+	IPV6_V6ONLY         = 0x1b
+	IPV6_UNICAST_HOPS   = 0x4
+	IPV6_MULTICAST_IF   = 0x9
+	IPV6_MULTICAST_HOPS = 0xa
+	IPV6_MULTICAST_LOOP = 0xb
+	IPV6_JOIN_GROUP     = 0xc
+	IPV6_LEAVE_GROUP    = 0xd
 
 	SOMAXCONN = 0x7fffffff
 
@@ -400,9 +499,6 @@ const (
 
 	WSADESCRIPTION_LEN = 256
 	WSASYS_STATUS_LEN  = 128
-
-	IPV6_JOIN_GROUP  = 12
-	IPV6_LEAVE_GROUP = 13
 )
 
 type WSABuf struct {
@@ -665,7 +761,95 @@ type CertContext struct {
 	Store        Handle
 }
 
+type CertChainContext struct {
+	Size                       uint32
+	TrustStatus                CertTrustStatus
+	ChainCount                 uint32
+	Chains                     **CertSimpleChain
+	LowerQualityChainCount     uint32
+	LowerQualityChains         **CertChainContext
+	HasRevocationFreshnessTime uint32
+	RevocationFreshnessTime    uint32
+}
+
+type CertSimpleChain struct {
+	Size                       uint32
+	TrustStatus                CertTrustStatus
+	NumElements                uint32
+	Elements                   **CertChainElement
+	TrustListInfo              uintptr
+	HasRevocationFreshnessTime uint32
+	RevocationFreshnessTime    uint32
+}
+
+type CertChainElement struct {
+	Size              uint32
+	CertContext       *CertContext
+	TrustStatus       CertTrustStatus
+	RevocationInfo    *CertRevocationInfo
+	IssuanceUsage     *CertEnhKeyUsage
+	ApplicationUsage  *CertEnhKeyUsage
+	ExtendedErrorInfo *uint16
+}
+
+type CertRevocationInfo struct {
+	Size             uint32
+	RevocationResult uint32
+	RevocationOid    *byte
+	OidSpecificInfo  uintptr
+	HasFreshnessTime uint32
+	FreshnessTime    uint32
+	CrlInfo          uintptr // *CertRevocationCrlInfo
+}
+
+type CertTrustStatus struct {
+	ErrorStatus uint32
+	InfoStatus  uint32
+}
+
+type CertUsageMatch struct {
+	Type  uint32
+	Usage CertEnhKeyUsage
+}
+
+type CertEnhKeyUsage struct {
+	Length           uint32
+	UsageIdentifiers **byte
+}
+
+type CertChainPara struct {
+	Size                         uint32
+	RequestedUsage               CertUsageMatch
+	RequstedIssuancePolicy       CertUsageMatch
+	URLRetrievalTimeout          uint32
+	CheckRevocationFreshnessTime uint32
+	RevocationFreshnessTime      uint32
+	CacheResync                  *Filetime
+}
+
+type CertChainPolicyPara struct {
+	Size            uint32
+	Flags           uint32
+	ExtraPolicyPara uintptr
+}
+
+type SSLExtraCertChainPolicyPara struct {
+	Size       uint32
+	AuthType   uint32
+	Checks     uint32
+	ServerName *uint16
+}
+
+type CertChainPolicyStatus struct {
+	Size              uint32
+	Error             uint32
+	ChainIndex        uint32
+	ElementIndex      uint32
+	ExtraPolicyStatus uintptr
+}
+
 const (
+	// do not reorder
 	HKEY_CLASSES_ROOT = 0x80000000 + iota
 	HKEY_CURRENT_USER
 	HKEY_LOCAL_MACHINE
@@ -689,6 +873,7 @@ const (
 )
 
 const (
+	// do not reorder
 	REG_NONE = iota
 	REG_SZ
 	REG_EXPAND_SZ

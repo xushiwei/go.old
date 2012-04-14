@@ -52,10 +52,22 @@ enum {
 
 #define bitMask (bitBlockBoundary | bitAllocated | bitMarked | bitSpecial)
 
+// Holding worldsema grants an M the right to try to stop the world.
+// The procedure is:
+//
+//	runtime·semacquire(&runtime·worldsema);
+//	m->gcing = 1;
+//	runtime·stoptheworld();
+//
+//	... do stuff ...
+//
+//	m->gcing = 0;
+//	runtime·semrelease(&runtime·worldsema);
+//	runtime·starttheworld();
+//
+uint32 runtime·worldsema = 1;
+
 // TODO: Make these per-M.
-static uint64 nlookup;
-static uint64 nsizelookup;
-static uint64 naddrlookup;
 static uint64 nhandoff;
 
 static int32 gctrace;
@@ -88,7 +100,7 @@ struct FinBlock
 
 extern byte data[];
 extern byte etext[];
-extern byte end[];
+extern byte ebss[];
 
 static G *fing;
 static FinBlock *finq; // list of finalizers that are to be executed
@@ -212,8 +224,6 @@ scanblock(byte *b, int64 n)
 
 			// Otherwise consult span table to find beginning.
 			// (Manually inlined copy of MHeap_LookupMaybe.)
-			nlookup++;
-			naddrlookup++;
 			k = (uintptr)obj>>PageShift;
 			x = k;
 			if(sizeof(void*) == 8)
@@ -301,49 +311,8 @@ scanblock(byte *b, int64 n)
 		b = *--wp;
 		nobj--;
 
-		// Figure out n = size of b.  Start by loading bits for b.
-		off = (uintptr*)b - (uintptr*)arena_start;
-		bitp = (uintptr*)arena_start - off/wordsPerBitmapWord - 1;
-		shift = off % wordsPerBitmapWord;
-		xbits = *bitp;
-		bits = xbits >> shift;
-
-		// Might be small; look for nearby block boundary.
-		// A block boundary is marked by either bitBlockBoundary
-		// or bitAllocated being set (see notes near their definition).
-		enum {
-			boundary = bitBlockBoundary|bitAllocated
-		};
-		// Look for a block boundary both after and before b
-		// in the same bitmap word.
-		//
-		// A block boundary j words after b is indicated by
-		//	bits>>j & boundary
-		// assuming shift+j < bitShift.  (If shift+j >= bitShift then
-		// we'll be bleeding other bit types like bitMarked into our test.)
-		// Instead of inserting the conditional shift+j < bitShift into the loop,
-		// we can let j range from 1 to bitShift as long as we first
-		// apply a mask to keep only the bits corresponding
-		// to shift+j < bitShift aka j < bitShift-shift.
-		bits &= (boundary<<(bitShift-shift)) - boundary;
-
-		// A block boundary j words before b is indicated by
-		//	xbits>>(shift-j) & boundary
-		// (assuming shift >= j).  There is no cleverness here
-		// avoid the test, because when j gets too large the shift
-		// turns negative, which is undefined in C.
-
-		for(j=1; j<bitShift; j++) {
-			if(((bits>>j)&boundary) != 0 || shift>=j && ((xbits>>(shift-j))&boundary) != 0) {
-				n = j*PtrSize;
-				goto scan;
-			}
-		}
-
-		// Fall back to asking span about size class.
+		// Ask span about size class.
 		// (Manually inlined copy of MHeap_Lookup.)
-		nlookup++;
-		nsizelookup++;
 		x = (uintptr)b>>PageShift;
 		if(sizeof(void*) == 8)
 			x -= (uintptr)arena_start>>PageShift;
@@ -352,7 +321,6 @@ scanblock(byte *b, int64 n)
 			n = s->npages<<PageShift;
 		else
 			n = runtime·class_to_size[s->sizeclass];
-	scan:;
 	}
 }
 
@@ -677,10 +645,7 @@ mark(void (*scan)(byte*, int64))
 	FinBlock *fb;
 
 	// mark data+bss.
-	// skip runtime·mheap itself, which has no interesting pointers
-	// and is mostly zeroed and would not otherwise be paged in.
-	scan(data, (byte*)&runtime·mheap - data);
-	scan((byte*)(&runtime·mheap+1), end - (byte*)(&runtime·mheap+1));
+	scan(data, ebss - data);
 
 	// mark stacks
 	for(gp=runtime·allg; gp!=nil; gp=gp->alllink) {
@@ -763,8 +728,10 @@ sweep(void)
 	byte *p;
 	MCache *c;
 	byte *arena_start;
+	int64 now;
 
 	arena_start = runtime·mheap.arena_start;
+	now = runtime·nanotime();
 
 	for(;;) {
 		s = work.spans;
@@ -772,6 +739,11 @@ sweep(void)
 			break;
 		if(!runtime·casp(&work.spans, s, s->allnext))
 			continue;
+
+		// Stamp newly unused spans. The scavenger will use that
+		// info to potentially give back some pages to the OS.
+		if(s->state == MSpanFree && s->unusedsince == 0)
+			s->unusedsince = now;
 
 		if(s->state != MSpanInUse)
 			continue;
@@ -859,11 +831,6 @@ runtime·gchelper(void)
 		runtime·notewakeup(&work.alldone);
 }
 
-// Semaphore, not Lock, so that the goroutine
-// reschedules when there is contention rather
-// than spinning.
-static uint32 gcsema = 1;
-
 // Initialized from $GOGC.  GOGC=off means no gc.
 //
 // Next gc is after we've allocated an extra amount of
@@ -946,16 +913,13 @@ runtime·gc(int32 force)
 	if(gcpercent < 0)
 		return;
 
-	runtime·semacquire(&gcsema);
+	runtime·semacquire(&runtime·worldsema);
 	if(!force && mstats.heap_alloc < mstats.next_gc) {
-		runtime·semrelease(&gcsema);
+		runtime·semrelease(&runtime·worldsema);
 		return;
 	}
 
 	t0 = runtime·nanotime();
-	nlookup = 0;
-	nsizelookup = 0;
-	naddrlookup = 0;
 	nhandoff = 0;
 
 	m->gcing = 1;
@@ -1013,6 +977,7 @@ runtime·gc(int32 force)
 	obj1 = mstats.nmalloc - mstats.nfree;
 
 	t3 = runtime·nanotime();
+	mstats.last_gc = t3;
 	mstats.pause_ns[mstats.numgc%nelem(mstats.pause_ns)] = t3 - t0;
 	mstats.pause_total_ns += t3 - t0;
 	mstats.numgc++;
@@ -1020,14 +985,15 @@ runtime·gc(int32 force)
 		runtime·printf("pause %D\n", t3-t0);
 
 	if(gctrace) {
-		runtime·printf("gc%d(%d): %D+%D+%D ms %D -> %D MB %D -> %D (%D-%D) objects %D pointer lookups (%D size, %D addr) %D handoff\n",
+		runtime·printf("gc%d(%d): %D+%D+%D ms %D -> %D MB %D -> %D (%D-%D) objects %D handoff\n",
 			mstats.numgc, work.nproc, (t1-t0)/1000000, (t2-t1)/1000000, (t3-t2)/1000000,
 			heap0>>20, heap1>>20, obj0, obj1,
 			mstats.nmalloc, mstats.nfree,
-			nlookup, nsizelookup, naddrlookup, nhandoff);
+			nhandoff);
 	}
-
-	runtime·semrelease(&gcsema);
+	
+	runtime·MProf_GC();
+	runtime·semrelease(&runtime·worldsema);
 
 	// If we could have used another helper proc, start one now,
 	// in the hope that it will be available next time.
@@ -1047,18 +1013,19 @@ runtime·gc(int32 force)
 }
 
 void
-runtime·UpdateMemStats(void)
+runtime·ReadMemStats(MStats *stats)
 {
-	// Have to acquire gcsema to stop the world,
+	// Have to acquire worldsema to stop the world,
 	// because stoptheworld can only be used by
 	// one goroutine at a time, and there might be
 	// a pending garbage collection already calling it.
-	runtime·semacquire(&gcsema);
+	runtime·semacquire(&runtime·worldsema);
 	m->gcing = 1;
 	runtime·stoptheworld();
 	cachestats();
+	*stats = mstats;
 	m->gcing = 0;
-	runtime·semrelease(&gcsema);
+	runtime·semrelease(&runtime·worldsema);
 	runtime·starttheworld(false);
 }
 

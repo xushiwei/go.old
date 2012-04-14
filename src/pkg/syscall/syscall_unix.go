@@ -7,6 +7,7 @@
 package syscall
 
 import (
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -17,7 +18,7 @@ var (
 	Stderr = 2
 )
 
-const darwinAMD64 = OS == "darwin" && ARCH == "amd64"
+const darwinAMD64 = runtime.GOOS == "darwin" && runtime.GOARCH == "amd64"
 
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
@@ -94,7 +95,7 @@ func (m *mmapper) Munmap(data []byte) (err error) {
 type Errno uintptr
 
 func (e Errno) Error() string {
-	if 0 <= e && int(e) < len(errors) {
+	if 0 <= int(e) && int(e) < len(errors) {
 		s := errors[e]
 		if s != "" {
 			return s
@@ -109,4 +110,20 @@ func (e Errno) Temporary() bool {
 
 func (e Errno) Timeout() bool {
 	return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT
+}
+
+// A Signal is a number describing a process signal.
+// It implements the os.Signal interface.
+type Signal int
+
+func (s Signal) Signal() {}
+
+func (s Signal) String() string {
+	if 0 <= s && int(s) < len(signals) {
+		str := signals[s]
+		if str != "" {
+			return str
+		}
+	}
+	return "signal " + itoa(int(s))
 }

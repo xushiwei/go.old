@@ -175,6 +175,11 @@ declare(Node *n, int ctxt)
 
 	n->lineno = parserline();
 	s = n->sym;
+
+	// kludgy: typecheckok means we're past parsing.  Eg genwrapper may declare out of package names later.
+	if(importpkg == nil && !typecheckok && s->pkg != localpkg)
+		yyerror("cannot declare name %S", s);
+
 	gen = 0;
 	if(ctxt == PEXTERN) {
 		externdcl = list(externdcl, n);
@@ -939,8 +944,10 @@ tointerface(NodeList *l)
 
 	t = typ(TINTER);
 
-	for(tp = &t->type; l; l=l->next) {
+	tp = &t->type;
+	for(; l; l=l->next) {
 		f = interfacefield(l->n);
+
 		if (l->n->left == N && f->type->etype == TINTER) {
 			// embedded interface, inline methods
 			for(t1=f->type->type; t1; t1=t1->down) {
@@ -1161,21 +1168,22 @@ methodsym(Sym *nsym, Type *t0, int iface)
 	char *p;
 	Type *t;
 	char *suffix;
+	Pkg *spkg;
+	static Pkg *toppkg;
 
 	t = t0;
 	if(t == T)
 		goto bad;
 	s = t->sym;
-	if(s == S) {
-		if(!isptr[t->etype])
-			goto bad;
+	if(s == S && isptr[t->etype]) {
 		t = t->type;
 		if(t == T)
 			goto bad;
 		s = t->sym;
-		if(s == S)
-			goto bad;
 	}
+	spkg = nil;
+	if(s != S)
+		spkg = s->pkg;
 
 	// if t0 == *t and t0 has a sym,
 	// we want to see *t, not t0, in the method name.
@@ -1188,11 +1196,23 @@ methodsym(Sym *nsym, Type *t0, int iface)
 		if(t0->width < types[tptr]->width)
 			suffix = "·i";
 	}
-	if(t0->sym == S && isptr[t0->etype])
-		p = smprint("(%-hT).%s%s", t0, nsym->name, suffix);
-	else
-		p = smprint("%-hT.%s%s", t0, nsym->name, suffix);
-	s = pkglookup(p, s->pkg);
+	if((spkg == nil || nsym->pkg != spkg) && !exportname(nsym->name)) {
+		if(t0->sym == S && isptr[t0->etype])
+			p = smprint("(%-hT).%s.%s%s", t0, nsym->pkg->prefix, nsym->name, suffix);
+		else
+			p = smprint("%-hT.%s.%s%s", t0, nsym->pkg->prefix, nsym->name, suffix);
+	} else {
+		if(t0->sym == S && isptr[t0->etype])
+			p = smprint("(%-hT).%s%s", t0, nsym->name, suffix);
+		else
+			p = smprint("%-hT.%s%s", t0, nsym->name, suffix);
+	}
+	if(spkg == nil) {
+		if(toppkg == nil)
+			toppkg = mkpkg(strlit("go"));
+		spkg = toppkg;
+	}
+	s = pkglookup(p, spkg);
 	free(p);
 	return s;
 
@@ -1261,7 +1281,7 @@ addmethod(Sym *sf, Type *t, int local)
 	}
 
 	pa = pa->type;
-	f = methtype(pa);
+	f = methtype(pa, 1);
 	if(f == T) {
 		t = pa;
 		if(t != T) {
@@ -1296,6 +1316,14 @@ addmethod(Sym *sf, Type *t, int local)
 	}
 
 	pa = f;
+	if(pa->etype == TSTRUCT) {
+		for(f=pa->type; f; f=f->down) {
+			if(f->sym == sf) {
+				yyerror("type %T has both field and method named %S", pa, sf);
+				return;
+			}
+		}
+	}
 
 	n = nod(ODCLFIELD, newname(sf), N);
 	n->type = t;
