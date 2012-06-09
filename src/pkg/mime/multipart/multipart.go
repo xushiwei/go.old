@@ -186,7 +186,7 @@ func (r *Reader) NextPart() (*Part, error) {
 	for {
 		line, err := r.bufReader.ReadSlice('\n')
 		if err != nil {
-			return nil, fmt.Errorf("multipart: NextPart: %v", err)
+			return nil, io.EOF // fmt.Errorf("multipart: NextPart: %v", err)
 		}
 
 		if r.isBoundaryDelimiterLine(line) {
