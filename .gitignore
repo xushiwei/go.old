@@ -1,0 +1,17 @@
+pkg/
+src/cmd/8l/enam.c
+src/cmd/dist/dist
+src/cmd/gc/opnames.h
+src/pkg/runtime/zasm_linux_386.h
+src/pkg/runtime/zgoarch_386.go
+src/pkg/runtime/zgoos_linux.go
+src/pkg/runtime/zmalloc_386.c
+src/pkg/runtime/zmprof_386.c
+src/pkg/runtime/zruntime1_386.c
+src/pkg/runtime/zruntime_defs_linux_386.go
+src/pkg/runtime/zsema_386.c
+src/pkg/runtime/zsigqueue_386.c
+src/pkg/runtime/zstring_386.c
+src/pkg/runtime/ztime_386.c
+src/pkg/runtime/zversion.go
+
