@@ -384,6 +384,22 @@ type LimitedReader struct {
 	N int64  // max bytes remaining
 }
 
+type RangeReader interface {
+	RangeRead(w Writer, from, to int64) (err error)
+}
+
+func (l *LimitedReader) WriteTo(w Writer) (written int64, err error) {
+	if rr, ok := l.R.(RangeReader); ok {
+		err = rr.RangeRead(w, 0, l.N)
+		if err == nil {
+			written = l.N
+			l.N = 0 // @@todo: RangeRead
+		}
+		return
+	}
+	return CopyN(w, l.R, l.N)
+}
+
 func (l *LimitedReader) Read(p []byte) (n int, err error) {
 	if l.N <= 0 {
 		return 0, EOF
