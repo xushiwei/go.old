@@ -1,3 +1,4 @@
+bin/
 pkg/
 src/cmd/8l/enam.c
 src/cmd/dist/dist
