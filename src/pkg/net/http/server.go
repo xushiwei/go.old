@@ -959,6 +959,11 @@ func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Re
 	mux.Handle(pattern, HandlerFunc(handler))
 }
 
+// HandleDefault registers the default handler.
+func (mux *ServeMux) HandleDefault(defaultHandler func(ResponseWriter, *Request)) {
+	mux.Default = HandlerFunc(defaultHandler)
+}
+
 // Handle registers the handler for the given pattern
 // in the DefaultServeMux.
 // The documentation for ServeMux explains how patterns are matched.
