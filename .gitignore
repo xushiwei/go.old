@@ -1,4 +1,5 @@
 pkg/
+bin/
 src/cmd/8l/enam.c
 src/cmd/dist/dist
 src/cmd/gc/opnames.h
