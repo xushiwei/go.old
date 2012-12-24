@@ -836,6 +836,7 @@ func RedirectHandler(url string, code int) Handler {
 type ServeMux struct {
 	mu sync.RWMutex
 	m  map[string]muxEntry
+	Default Handler
 }
 
 type muxEntry struct {
@@ -844,7 +845,9 @@ type muxEntry struct {
 }
 
 // NewServeMux allocates and returns a new ServeMux.
-func NewServeMux() *ServeMux { return &ServeMux{m: make(map[string]muxEntry)} }
+func NewServeMux() *ServeMux {
+	return &ServeMux{m: make(map[string]muxEntry), Default: HandlerFunc(NotFound)}
+}
 
 // DefaultServeMux is the default ServeMux used by Serve.
 var DefaultServeMux = NewServeMux()
@@ -907,7 +910,7 @@ func (mux *ServeMux) handler(r *Request) Handler {
 		h = mux.match(r.URL.Path)
 	}
 	if h == nil {
-		h = NotFoundHandler()
+		h = mux.Default
 	}
 	return h
 }
@@ -954,6 +957,11 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 // HandleFunc registers the handler function for the given pattern.
 func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
 	mux.Handle(pattern, HandlerFunc(handler))
+}
+
+// HandleDefault registers the default handler.
+func (mux *ServeMux) HandleDefault(defaultHandler func(ResponseWriter, *Request)) {
+	mux.Default = HandlerFunc(defaultHandler)
 }
 
 // Handle registers the handler for the given pattern
